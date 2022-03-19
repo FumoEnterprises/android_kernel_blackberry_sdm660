@@ -1549,6 +1549,7 @@ exit:
 		mbhc->mbhc_cb->mbhc_micbias_control(codec, MIC_BIAS_2,
 						    MICB_DISABLE);
 
+    pr_debug("%s: Plug type finally is %i\n", __func__, plug_type);
 	/*
 	 * If plug type is corrected from special headset to headphone,
 	 * clear the micbias enable flag, set micbias back to 1.8V and
@@ -3001,9 +3002,6 @@ int wcd_mbhc_init(struct wcd_mbhc *mbhc, struct snd_soc_codec *codec,
 				__func__);
 			return ret;
 		}
-
-		set_bit(INPUT_PROP_NO_DUMMY_RELEASE,
-			mbhc->button_jack.jack->input_dev->propbit);
 
 		INIT_DELAYED_WORK(&mbhc->mbhc_firmware_dwork,
 				  wcd_mbhc_fw_read);

@@ -1,0 +1,43 @@
+<14>[  306.967240] init: starting service 'vendor.imsrcsservice'...
+<6>[  307.040179] binder: 4847:4847 ioctl 40046210 7ff90ffea4 returned -22
+<14>[  307.091125] logd: logdr: UID=1001 GID=1001 PID=4851 n tail=500 logMask=8 pid=4847 start=0ns deadline=0ns
+<14>[  307.107637] logd: logdr: UID=1001 GID=1001 PID=4851 n tail=500 logMask=1 pid=4847 start=0ns deadline=0ns
+<11>[  307.127243] init: Control message: Could not find 'aidl/android.hardware.biometrics.fingerprint.IFingerprint/default' for ctl.interface_start from pid: 672 (/system/bin/servicemanager)
+<14>[  307.201617] libprocessgroup: Removed cgroup /sys/fs/cgroup/uid_1001/pid_4847
+<11>[  307.201747] init: process with updatable components 'vendor.imsrcsservice' exited 4 times in 4 minutes
+<14>[  307.204938] init: Untracked pid 4855 received signal 9
+<14>[  307.204972] init: Untracked pid 4855 did not have an associated service entry and will not be reaped
+<14>[  307.205198] init: Untracked pid 4851 exited with status 0
+<14>[  307.205215] init: Untracked pid 4851 did not have an associated service entry and will not be reaped
+<14>[  307.206136] init: processing action (sys.init.updatable_crashing=1) from (/system/etc/init/flags_health_check.rc:10)
+<14>[  307.207931] init: starting service 'exec 121 (/system/bin/flags_health_check UPDATABLE_CRASHING)'...
+<14>[  307.229160] logd: logdr: UID=1000 GID=1000 PID=4856 n tail=500 logMask=8 pid=4848 start=0ns deadline=0ns
+<14>[  307.244389] init: ... started service 'exec 121 (/system/bin/flags_health_check UPDATABLE_CRASHING)' has pid 4862
+<14>[  307.244448] init: SVC_EXEC service 'exec 121 (/system/bin/flags_health_check UPDATABLE_CRASHING)' pid 4862 (uid 1000 gid 1000+0 context default) started; waiting...
+<14>[  307.244823] logd: logdr: UID=1000 GID=1000 PID=4856 n tail=500 logMask=1 pid=4848 start=0ns deadline=0ns
+<4>[  307.256404] audit: audit_lost=46509 audit_rate_limit=5 audit_backlog_limit=64
+<3>[  307.256467] audit: rate limit exceeded
+<38>[  307.256970] type=1400 audit(1767704708.959:46858): avc:  denied  { open } for  comm="flags_health_ch" path="/dev/__properties__/u:object_r:aac_drc_prop:s0" dev="tmpfs" ino=17439 scontext=u:r:flags_health_check:s0 tcontext=u:object_r:aac_drc_prop:s0 tclass=file permissive=1
+<38>[  307.258924] type=1400 audit(1767704708.959:46859): avc:  denied  { getattr } for  comm="flags_health_ch" path="/dev/__properties__/u:object_r:aac_drc_prop:s0" dev="tmpfs" ino=17439 scontext=u:r:flags_health_check:s0 tcontext=u:object_r:aac_drc_prop:s0 tclass=file permissive=1
+<38>[  307.259005] type=1400 audit(1767704708.959:46860): avc:  denied  { open } for  comm="flags_health_ch" path="/dev/__properties__/u:object_r:ab_update_gki_prop:s0" dev="tmpfs" ino=17441 scontext=u:r:flags_health_check:s0 tcontext=u:object_r:ab_update_gki_prop:s0 tclass=file permissive=1
+<38>[  307.259073] type=1400 audit(1767704708.959:46861): avc:  denied  { getattr } for  comm="flags_health_ch" path="/dev/__properties__/u:object_r:ab_update_gki_prop:s0" dev="tmpfs" ino=17441 scontext=u:r:flags_health_check:s0 tcontext=u:object_r:ab_update_gki_prop:s0 tclass=file permissive=1
+<38>[  307.259139] type=1400 audit(1767704708.959:46862): avc:  denied  { open } for  comm="flags_health_ch" path="/dev/__properties__/u:object_r:adaptive_haptics_prop:s0" dev="tmpfs" ino=17442 scontext=u:r:flags_health_check:s0 tcontext=u:object_r:adaptive_haptics_prop:s0 tclass=file permissive=1
+<14>[  307.274873] init: Service 'vendor.fingerprint-default' (pid 4848) received signal 6
+<14>[  307.274910] init: Sending signal 9 to service 'vendor.fingerprint-default' (pid 4848) process group...
+<14>[  307.276233] libprocessgroup: Removed cgroup /sys/fs/cgroup/uid_1000/pid_4848
+<11>[  307.276309] init: process with updatable components 'vendor.fingerprint-default' exited 4 times in 4 minutes
+<14>[  307.279260] init: Untracked pid 4859 exited with status 0
+<14>[  307.279282] init: Untracked pid 4859 did not have an associated service entry and will not be reaped
+<14>[  307.279439] init: Untracked pid 4856 exited with status 0
+<14>[  307.279454] init: Untracked pid 4856 did not have an associated service entry and will not be reaped
+<14>[  307.296246] init: Service 'exec 121 (/system/bin/flags_health_check UPDATABLE_CRASHING)' (pid 4862) exited with status 0 waiting took 0.083000 seconds
+<14>[  307.296300] init: Sending signal 9 to service 'exec 121 (/system/bin/flags_health_check UPDATABLE_CRASHING)' (pid 4862) process group...
+<14>[  307.296678] libprocessgroup: Removed cgroup /sys/fs/cgroup/uid_1000/pid_4862
+<14>[  307.297714] init: processing action (sys.init.updatable_crashing=1) from (/system/etc/init/flags_health_check.rc:10)
+<14>[  307.299659] init: starting service 'exec 122 (/system/bin/flags_health_check UPDATABLE_CRASHING)'...
+<14>[  307.373117] init: Service 'exec 122 (/system/bin/flags_health_check UPDATABLE_CRASHING)' (pid 4865) exited with status 0 waiting took 0.069000 seconds
+<14>[  307.373163] init: Sending signal 9 to service 'exec 122 (/system/bin/flags_health_check UPDATABLE_CRASHING)' (pid 4865) process group...
+<14>[  307.373509] libprocessgroup: Removed cgroup /sys/fs/cgroup/uid_1000/pid_4865
+<14>[  308.132579] servicemanager: Caller(pid=1493,uid=1000,sid=u:r:system_server:s0) Since 'android.hardware.biometrics.fingerprint.IFingerprint/default' could not be found trying to start it as a lazy AIDL service. (if it's not configured to be a lazy service, it may be stuck starting or still starting).
+<11>[  308.138983] init: Control message: Could not find 'aidl/android.hardware.biometrics.fingerprint.IFingerprint/default' for ctl.interface_start from pid: 672 (/system/bin/servicemanager)
+<14>[  308.139968] servicemanager: Caller(pid=1493,uid=1000,sid=u:r:system_server:s0) Tried to start aidl service android.hardware.biometrics.fingerprint.IFingerprint/default as a lazy service, but was unable to. Usually this happens when a service is not installed, but if the service is intended to be used as a lazy service, then it may be configured incorrectly.
