@@ -1,4 +1,4 @@
-/* Copyright (c) 2013-2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2013-2017, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -1563,16 +1563,12 @@ static int mdp3_get_metadata(struct msm_fb_data_type *mfd,
 		}
 		break;
 	case metadata_op_get_ion_fd:
-		if (mfd->fb_ion_handle && mfd->fb_ion_client) {
-			get_dma_buf(mfd->fbmem_buf);
+		if (mfd->fb_ion_handle) {
 			metadata->data.fbmem_ionfd =
-				ion_share_dma_buf_fd(mfd->fb_ion_client,
-					mfd->fb_ion_handle);
-			if (metadata->data.fbmem_ionfd < 0) {
-				dma_buf_put(mfd->fbmem_buf);
+					dma_buf_fd(mfd->fbmem_buf, 0);
+			if (metadata->data.fbmem_ionfd < 0)
 				pr_err("fd allocation failed. fd = %d\n",
-					metadata->data.fbmem_ionfd);
-			}
+						metadata->data.fbmem_ionfd);
 		}
 		break;
 	default:

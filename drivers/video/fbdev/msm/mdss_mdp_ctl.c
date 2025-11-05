@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2018, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -77,15 +77,13 @@ static inline u64 fudge_factor(u64 val, u32 numer, u32 denom)
 	u64 result = val;
 
 	if (val) {
-		u64 temp = U64_MAX;
+		u64 temp = -1UL;
 
 		do_div(temp, val);
 		if (temp > numer) {
 			/* no overflow, so we can do the operation*/
 			result = (val * (u64)numer);
 			do_div(result, denom);
-		} else {
-			pr_warn("Overflow, skip fudge factor\n");
 		}
 	}
 	return result;
@@ -1255,63 +1253,6 @@ static inline int cmpu32(const void *a, const void *b)
 	return (*(u32 *)a < *(u32 *)b) ? -1 : 0;
 }
 
-/* Return true if multi-rect layers are side by side */
-static bool is_rect_parallel(struct mdss_rect *rect1, struct mdss_rect *rect2)
-{
-	return (rect1->y >= rect2->y && rect1->y < rect2->y + rect2->h) ||
-		(rect2->y >= rect1->y && rect2->y < rect1->y + rect1->h);
-}
-
-/*
- * Return true if multi-rect layers are placed serially,
- * yet need parallel mode to accommodate prefill and detile latency.
- *
- * Smart DMA v1.0 mandates same format on both rects.
- */
-static bool is_rect_parallel_multiplexed(
-	struct mdss_mdp_format_params *fmt, struct mdss_rect *rect1,
-	struct mdss_rect *rect2)
-{
-	u16 delta;
-
-	if (is_rect_parallel(rect1, rect2))
-		return false;
-
-	if (rect1->y >= rect2->y + rect2->h)
-		delta = rect1->y - rect2->y - rect2->h;
-	else
-		delta = rect2->y - rect1->y - rect1->h;
-
-	if (mdss_mdp_is_ubwc_format(fmt)) {
-		u16 tile_height, tile_width;
-
-		mdss_mdp_get_ubwc_micro_dim(fmt->format,
-			&tile_width, &tile_height);
-
-		/* Extra one line for safety */
-		if (delta <= 2 * tile_height)
-			return true;
-	} else if (mdss_mdp_is_linear_format(fmt) &&
-		(delta == 0 || delta == 1))
-		return true;
-
-	return false;
-}
-
-static bool is_pipe_parallel_multiplexed(struct mdss_mdp_pipe *pipe)
-{
-	struct mdss_mdp_pipe *pipe_rec;
-
-	if (pipe->multirect.mode != MDSS_MDP_PIPE_MULTIRECT_PARALLEL ||
-		!pipe->multirect.next)
-		return false;
-
-	pipe_rec = pipe->multirect.next;
-
-	return is_rect_parallel_multiplexed(pipe->src_fmt,
-		&pipe->dst, &pipe_rec->dst);
-}
-
 static void mdss_mdp_perf_calc_mixer(struct mdss_mdp_mixer *mixer,
 		struct mdss_mdp_perf_params *perf,
 		struct mdss_mdp_pipe **pipe_list, int num_pipes,
@@ -1501,34 +1442,6 @@ static void mdss_mdp_perf_calc_mixer(struct mdss_mdp_mixer *mixer,
 	}
 
 	/*
-	 * Smart DMA v1.0 requires parallel multi-rect mode for serially
-	 * placed layers if delta lines between the layers is less than
-	 * 2 * tile_height for UBWC and 0/1 for linear formats. Detect
-	 * such combinations and add overlap bandwidth for both rects.
-	 */
-	for (i = 0; i < num_pipes; i++) {
-		pipe = pipe_list[i];
-
-		if (pipe->multirect.mode == MDSS_MDP_PIPE_MULTIRECT_PARALLEL) {
-			struct mdss_mdp_pipe *pipe_rec = NULL;
-			int j = i + 1;
-
-			while (j < num_pipes) {
-				if (pipe->multirect.next == pipe_list[j])
-					pipe_rec = pipe_list[j];
-				j++;
-			}
-
-			if (pipe_rec && is_pipe_parallel_multiplexed(pipe)) {
-				u64 tmp = bw_overlap[i];
-
-				bw_overlap[i] += bw_overlap[--j];
-				bw_overlap[j] += tmp;
-			}
-		}
-	}
-
-	/*
 	 * Sort the v_region array so the total display area can be
 	 * divided into individual regions. Check how many pipes fetch
 	 * data for each region and sum them up, then the worst case
@@ -1612,7 +1525,7 @@ static bool is_mdp_prefetch_needed(struct mdss_panel_info *pinfo)
  * the mdp fetch lines  as the last (25 - vbp - vpw) lines of vertical
  * front porch.
  */
-int mdss_mdp_get_prefetch_lines(struct mdss_panel_info *pinfo, bool is_fixed)
+int mdss_mdp_get_prefetch_lines(struct mdss_panel_info *pinfo)
 {
 	int prefetch_avail = 0;
 	int v_total, vfp_start;
@@ -1621,11 +1534,7 @@ int mdss_mdp_get_prefetch_lines(struct mdss_panel_info *pinfo, bool is_fixed)
 	if (!is_mdp_prefetch_needed(pinfo))
 		return 0;
 
-	if (is_fixed)
-		v_total = mdss_panel_get_vtotal_fixed(pinfo);
-	else
-		v_total = mdss_panel_get_vtotal(pinfo);
-
+	v_total = mdss_panel_get_vtotal(pinfo);
 	vfp_start = (pinfo->lcdc.v_back_porch + pinfo->lcdc.v_pulse_width +
 			pinfo->yres);
 
@@ -2664,7 +2573,6 @@ struct mdss_mdp_mixer *mdss_mdp_mixer_alloc(
 			mixer_pool += ctl->mdata->ndspp;
 			nmixers -= ctl->mdata->ndspp;
 		} else if ((ctl->panel_data->panel_info.is_pluggable) &&
-				!(ctl->panel_data->panel_info.is_prim_panel) &&
 				nmixers_active) {
 			mixer_pool += ctl->mdata->ndspp;
 			nmixers -= ctl->mdata->ndspp;
@@ -4980,8 +4888,7 @@ static inline void __mdss_mdp_mixer_write_layer(struct mdss_mdp_ctl *ctl,
 	u32 off[NUM_MIXERCFG_REGS];
 	int i;
 
-	if (WARN_ON(!values || count < NUM_MIXERCFG_REGS))
-		return;
+	BUG_ON(!values || count < NUM_MIXERCFG_REGS);
 
 	__mdss_mdp_mixer_get_offsets(mixer_num, off, ARRAY_SIZE(off));
 
@@ -6153,11 +6060,10 @@ int mdss_mdp_display_commit(struct mdss_mdp_ctl *ctl, void *arg,
 	    !bitmap_empty(mdata->bwc_enable_map, MAX_DRV_SUP_PIPES))
 		mdss_mdp_bwcpanic_ctrl(mdata, true);
 
-	if (mdata->mdp_rev >= MDSS_MDP_HW_REV_300) {
-		ret = mdss_mdp_cwb_setup(ctl);
-		if (ret)
-			pr_warn("concurrent setup failed ctl=%d\n", ctl->num);
-	}
+	ret = mdss_mdp_cwb_setup(ctl);
+	if (ret)
+		pr_warn("concurrent setup failed ctl=%d\n", ctl->num);
+
 	ctl_flush_bits |= ctl->flush_bits;
 
 	ATRACE_BEGIN("flush_kickoff");

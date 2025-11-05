@@ -1,4 +1,4 @@
-/* Copyright (c) 2008-2020, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2008-2017, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -19,9 +19,6 @@
 #include <linux/stringify.h>
 #include <linux/types.h>
 #include <linux/debugfs.h>
-#include <linux/of_gpio.h>
-#include <linux/gpio.h>
-#include <linux/interrupt.h>
 
 /* panel id type */
 struct panel_id {
@@ -65,32 +62,9 @@ struct panel_id {
 /* HDR propeties count */
 #define DISPLAY_PRIMARIES_COUNT	8	/* WRGB x and y values*/
 
-//SW4-HL-Display-ImplementPanelID-00+{_20151112
-enum {	//this id syncs with the item 'fih,panel-id' of each panel's dtsi
-	SIMULATION_PANEL = 0,
-	FIH_ILI7807E_1080P_VIDEO_PANEL = 1,
-	FIH_FT8716U_1080P_CTC_VIDEO_PANEL = 2,		//SW4-JasonSH-Display-BringUpFT8716U-00+_20170619
-	FIH_FT8716U_FHD_CTC_B2N_VIDEO_PANEL = 3,		/* B2N - gatycclu - Add B2N setting */
-	FIH_NT36672_FHD_CTC_B2N_VIDEO_PANEL = 4,		/* B2N - gatycclu - Add B2N 2nd source setting */
-	FIH_NT36672_H_GLASS_FHD_CTC_B2N_VIDEO_PANEL = 5,		/* B2N 2nd source H-GLASS setting */
-	FIH_FT8716_1080P_VIDEO_EVB_PANEL = 11,
-	FIH_FT8716_1080P_VIDEO_EVT_PANEL = 12,
-	FIH_FT8716_FFD_VIDEO_PANEL = 13,
-	FIH_FT8716U_FFD_VIDEO_PANEL = 14,
-	FIH_R69338_1080P_VIDEO_PANEL_PL2 = 15,			//ZZDC sunqiupeng add for bringup PL2 2nd panel@20171226
-	FIH_CTC_OTM1911A_FHD_VIDEO_PANEL = 16,		//SW4-HL-Display-BringUpCTCOTM1911A-00+_20180116
-	FIH_AUO_OTM1911A_FHD_VIDEO_PANEL = 17,		//SW4-HL-Display-OTM1911A-AUO-BringUp-00+_20180221
-    FIH_CTC_JD9522Z_FHD_VIDEO_PANEL = 18,           //SW4-HL-CTL-HDR-ReadLcmSwId-00+_20180330
-    FIH_CTL_CTC_OTM1911A_FHD_VIDEO_PANEL = 19,	//SW4-HL-Display-CTL-GT915L-CTC_n_AUO-BringUp-00+_20180226
-    FIH_CTL_AUO_OTM1911A_FHD_VIDEO_PANEL = 20,      //SW4-HL-CTL-HDR-ReadLcmSwId-00+_20180330
-    FIH_CTL_CTC_JD9522Z_FHD_VIDEO_PANEL = 21,       //SW4-HL-CTL-HDR-ReadLcmSwId-00+_20180330
-    FIH_FT8719_1080P_VIDEO_PANEL = 22,
-};
-//SW4-HL-Display-ImplementPanelID-00+}_20151112
-
 static inline const char *mdss_panel2str(u32 panel)
 {
-	static const char *names[] = {
+	static const char const *names[] = {
 #define PANEL_NAME(n) [n ## _PANEL] = __stringify(n)
 		PANEL_NAME(MIPI_VIDEO),
 		PANEL_NAME(MIPI_CMD),
@@ -334,7 +308,6 @@ enum mdss_intf_events {
 	MDSS_EVENT_DSI_TIMING_DB_CTRL,
 	MDSS_EVENT_AVR_MODE,
 	MDSS_EVENT_REGISTER_CLAMP_HANDLER,
-	MDSS_EVENT_DSI_DYNAMIC_BITCLK,
 	MDSS_EVENT_MAX,
 };
 
@@ -419,7 +392,6 @@ struct lcd_panel_info {
 	u32 h_active_low;
 	u32 v_back_porch;
 	u32 v_front_porch;
-	u32 v_front_porch_fixed;
 	u32 v_pulse_width;
 	u32 v_active_low;
 	u32 border_clr;
@@ -807,8 +779,6 @@ struct mdss_panel_info {
 	u32 yres;
 	u32 physical_width;
 	u32 physical_height;
-	u32 physical_width_full;	//SW4-HL-Display-CTS_Xdpi_Ydpi-00+_20151112
-	u32 physical_height_full;	//SW4-HL-Display-CTS_Xdpi_Ydpi-00+_20151112
 	u32 bpp;
 	u32 type;
 	u32 wait_cycle;
@@ -828,25 +798,18 @@ struct mdss_panel_info {
 	u32 rst_seq_len;
 	u32 vic; /* video identification code */
 	u32 deep_color;
-	bool is_ce_mode; /* CE video format */
-	u8 csc_type;
 	struct mdss_rect roi;
 	struct mdss_dsi_dual_pu_roi dual_roi;
 	int pwm_pmic_gpio;
 	int pwm_lpg_chan;
 	int pwm_period;
 	bool dynamic_fps;
-	bool dynamic_bitclk;
-	u32 *supp_bitclks;
-	u32 supp_bitclk_len;
 	bool ulps_feature_enabled;
 	bool ulps_suspend_enabled;
 	bool panel_ack_disabled;
 	bool esd_check_enabled;
 	bool allow_phy_power_off;
 	char dfps_update;
-	/* new requested bitclk before it is updated in hw */
-	int new_clk_rate;
 	/* new requested fps before it is updated in hw */
 	int new_fps;
 	/* stores initial fps after boot */
@@ -965,21 +928,6 @@ struct mdss_panel_info {
 
 	/* esc clk recommended for the panel */
 	u32 esc_clk_rate_hz;
-
-	int panel_id;	//SW4-HL-Display-ImplementPanelID-00+_20151112
-
-	//SW4-HL-Display-GlanceMode-00+{_20170524
-	bool aod_enabled;
-
-	bool aod_power_keep;
-	bool aod_power_keep_1p8;
-	bool aod_power_keep_3p3;
-	bool aod_power_keep_lab;
-	bool aod_power_keep_ibb;
-
-	bool aod_ready_on;
-	//struct wake_lock aod_wake_lock;
-	//SW4-HL-Display-GlanceMode-00+}_20170524
 };
 
 struct mdss_panel_timing {
@@ -1035,7 +983,6 @@ struct mdss_panel_data {
 	 * and teardown.
 	 */
 	int (*event_handler) (struct mdss_panel_data *pdata, int e, void *arg);
-	enum mdss_mdp_csc_type (*get_csc_type)(struct mdss_panel_data *pdata);
 	struct device_node *(*get_fb_node)(struct platform_device *pdev);
 
 	struct list_head timings_list;
@@ -1053,7 +1000,6 @@ struct mdss_panel_data {
 	bool panel_disable_mode;
 
 	int panel_te_gpio;
-	bool is_te_irq_enabled;
 	struct completion te_done;
 };
 
@@ -1064,23 +1010,6 @@ struct mdss_panel_debugfs_info {
 	u32 override_flag;
 	struct mdss_panel_debugfs_info *next;
 };
-
-static inline void panel_update_te_irq(struct mdss_panel_data *pdata,
-					bool enable)
-{
-	if (!pdata) {
-		pr_err("Invalid Params\n");
-		return;
-	}
-
-	if (enable && !pdata->is_te_irq_enabled) {
-		enable_irq(gpio_to_irq(pdata->panel_te_gpio));
-		pdata->is_te_irq_enabled = true;
-	} else if (!enable && pdata->is_te_irq_enabled) {
-		disable_irq(gpio_to_irq(pdata->panel_te_gpio));
-		pdata->is_te_irq_enabled = false;
-	}
-}
 
 /**
  * mdss_get_panel_framerate() - get panel frame rate based on panel information
@@ -1129,23 +1058,6 @@ static inline u32 mdss_panel_get_framerate(struct mdss_panel_info *panel_info)
 		break;
 	}
 	return frame_rate;
-}
-
-/*
- * mdss_panel_get_vtotal_fixed() - return panel device tree vertical height
- * @pinfo:	Pointer to panel info containing all panel information
- *
- * Returns the total height as defined in panel device tree including any
- * blanking regions which are not visible to user but used to calculate
- * panel clock.
- */
-static inline int mdss_panel_get_vtotal_fixed(struct mdss_panel_info *pinfo)
-{
-	return pinfo->yres + pinfo->lcdc.v_back_porch +
-			pinfo->lcdc.v_front_porch_fixed +
-			pinfo->lcdc.v_pulse_width+
-			pinfo->lcdc.border_top +
-			pinfo->lcdc.border_bottom;
 }
 
 /*

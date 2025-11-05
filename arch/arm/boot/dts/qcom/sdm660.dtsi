@@ -300,17 +300,28 @@
 	firmware: firmware {
 		android {
 			compatible = "android,firmware";
-			boot_devices = "soc/c0c4000.sdhci";
 			fstab {
 				compatible = "android,fstab";
+				/* [FEATURE]-MODIFY-BEGIN by TCTNB.linjian.xiang, 2017-10-19,task-5391882, reverting A/B */
+				/* mount system in erarly stage to avoid loading selinux policy failed */
+				/* delete slotselect tag for vendor */
+				system {
+					compatible = "android,system";
+					dev = "/dev/block/platform/soc/c0c4000.sdhci/by-name/system";
+					type = "ext4";
+					mnt_flags = "ro,barrier=1,discard";
+					fsmgr_flags = "wait";
+					status = "ok";
+				};
 				vendor {
 					compatible = "android,vendor";
 					dev = "/dev/block/platform/soc/c0c4000.sdhci/by-name/vendor";
 					type = "ext4";
 					mnt_flags = "ro,barrier=1,discard";
-					fsmgr_flags = "wait,slotselect";
-					status = "disabled";
+					fsmgr_flags = "wait";
+					status = "ok";
 				};
+				/* [FEATURE]-MODIFY-END by TCTNB.linjian.xiang */
 			};
 		};
 	};
@@ -335,7 +346,7 @@
 		removed_regions: removed_regions@85800000 {
 			compatible = "removed-dma-pool";
 			no-map;
-			reg = <0x0 0x85800000 0x0 0x3700000>;
+			reg = <0x0 0x85800000 0x0 0x5300000>;
 		};
 
 		modem_fw_mem: modem_fw_region@8ac00000 {
@@ -383,7 +394,7 @@
 			alloc-ranges = <0x0 0x00000000 0x0 0xffffffff>;
 			reusable;
 			alignment = <0x0 0x400000>;
-			size = <0x0 0x1400000>;
+			size = <0x0 0x1C00000>;
 		};
 
 		secure_display_memory: secure_region {
@@ -405,14 +416,17 @@
 		};
 
 		cont_splash_mem: splash_region@9d400000 {
-			reg = <0x0 0x9d400000 0x0 0x23ff000>;
+			reg = <0x0 0x9d400000 0x0 0x02400000>;
 			label = "cont_splash_mem";
 		};
-
-		dfps_data_mem: dfps_data_mem@0x9f7ff000 {
-		       reg = <0 0x9f8ff000 0 0x00001000>;
-		       label = "dfps_data_mem";
-		};
+                /* [FEATURE]-Add-BEGIN by TCLNB.huaidi.feng,2017/09/19, enable pstore function task-5345652*/
+                /*pstore_mem: region@0 {
+                        compatible = "removed-dma-pool";
+                        no-map;
+                        reg = <0x0 0xffe00000 0x0 0x00200000>;
+                        label = "pstore_mem";
+               };*/  /*BBRY uses rese_cause for kmsg collection, do not use TCL changes in this file.*/
+               /* [FEATURE]-Add-END by TCLNB.huaidi.feng */
 	};
 
 	bluetooth: bt_wcn3990 {
@@ -433,6 +447,57 @@
 		qca,bt-vdd-pa-current-level = <1>; /* LPM/PFM */
 		qca,bt-vdd-ldo-current-level = <1>; /* LPM/PFM */
 	};
+
+	reserved-memory {
+		#address-cells = <0x2>;
+		#size-cells = <0x2>;
+		reset_mem: reset_mem@0 {
+			compatible = "removed-dma-pool";
+			no-map;
+			/*
+			 * Bootloader picks either oem,reg or oem,reg-ddt
+			 * depending on whether ddt token is present or not.
+			 * It then copies that property's value into the reg
+			 * property.
+			 *
+			 * Format is 4 32 bit values, making up 2 64 bit values
+			 * <Address-MSB Address-LSB Size-MSB Size-LSB>
+			 */
+			reg = <0 0 0 0>;
+			oem,reg = <0x00000001 0xFD7BB000 0x00000000 0x00001000>;
+			oem,reg-ddt = <0x00000001 0xFD73F000 0x00000000 0x00001000>;
+			oem,writeable;
+			label = "reset";
+		};
+
+		reset_log_mem: reset_log_mem@0 {
+			compatible = "removed-dma-pool";
+			no-map;
+			/*
+			 * Bootloader picks either oem,reg or oem,reg-ddt
+			 * depending on whether ddt token is present or not.
+			 * It then copies that property's value into the reg
+			 * property.
+			 *
+			 * Format is 4 32 bit values, making up 2 64 bit values
+			 * <Address-MSB Address-LSB Size-MSB Size-LSB>
+			 */
+			reg = <0 0 0 0>;
+			oem,reg = <0x00000001 0xFD7BC000 0x00000000 0x00004000>;
+			oem,reg-ddt = <0x00000001 0xFD740000 0x00000000 0x00080000>;
+			label = "reset_log";
+		};
+	};
+
+	oem,preserved_reset_region {
+		compatible = "oem,preserved_reset_region";
+		regions = <&reset_mem &reset_log_mem> ;
+	};
+
+	oem,export_bsi {
+		compatible = "oem,export_bsi_region", "oem,export_bsi";
+	};
+
 };
 
 #include "sdm660-smp2p.dtsi"
@@ -684,7 +749,7 @@
 		clocks = <&clock_gcc GCC_BLSP1_QUP3_SPI_APPS_CLK>,
 			<&clock_gcc GCC_BLSP1_AHB_CLK>;
 		clock-frequency = <15000000>;
-		qcom,ipc-gpio = <&tlmm 72 0>;
+		//qcom,ipc-gpio = <&tlmm 72 0>; //goodix fp use it // MODIFIED by Xiaoyun.Wei, 2017-10-13,BUG-5397445
 		qcom,finger-detect-gpio = <&pm660_gpios 11 0>;
 	};
 
@@ -1260,10 +1325,18 @@
 		compatible = "qcom,clk-cpu-osm";
 		reg = <0x179c0000 0x4000>, <0x17916000 0x1000>,
 		      <0x17816000 0x1000>, <0x179d1000 0x1000>,
-		      <0x00784130 0x8>, <0x00784130 0x8>;
+		      <0x00784130 0x8>, <0x00784130 0x8>,
+		      <0x17914800 0x800>;
 		reg-names = "osm", "pwrcl_pll", "perfcl_pll",
 			    "apcs_common", "pwrcl_efuse",
-			    "perfcl_efuse";
+			    "perfcl_efuse", "pwrcl_acd";
+
+		qcom,acdtd-val = <0x0000a111 0x0000a111>;
+		qcom,acdcr-val = <0x002c5ffd 0x002c5ffd>;
+		qcom,acdsscr-val = <0x00000901 0x00000901>;
+		qcom,acdextint0-val = <0x2cf9ae8 0x2cf9ae8>;
+		qcom,acdextint1-val = <0x2cf9afe 0x2cf9afe>;
+		qcom,acdautoxfer-val = <0x00000015 0x00000015>;
 
 		vdd-pwrcl-supply = <&apc0_pwrcl_vreg>;
 		vdd-perfcl-supply = <&apc1_perfcl_vreg>;
@@ -1301,16 +1374,6 @@
 			<  1536000000 0x04040050 0x08400040 0x2 6 >,
 			<  1612800000 0x04040054 0x09430043 0x2 7 >;
 
-		qcom,pwrcl-speedbin4-v0 =
-			<   300000000 0x0004000f 0x01200020 0x1 1 >,
-			<   633600000 0x05040021 0x03200020 0x1 2 >,
-			<   902400000 0x0404002f 0x04260026 0x1 3 >,
-			<  1113600000 0x0404003a 0x052e002e 0x2 4 >,
-			<  1401600000 0x04040049 0x073a003a 0x2 5 >,
-			<  1536000000 0x04040050 0x08400040 0x2 6 >,
-			<  1747200000 0x0404005b 0x09480048 0x2 7 >,
-			<  1843200000 0x04040060 0x094c004c 0x3 8 >;
-
 		qcom,perfcl-speedbin0-v0 =
 			<   300000000 0x0004000f 0x01200020 0x1 1 >,
 			<  1113600000 0x0404003a 0x052e002e 0x1 2 >,
@@ -1336,15 +1399,9 @@
 			<  1747200000 0x0404005b 0x09480048 0x2 4 >,
 			<  1804800000 0x0404005e 0x094b004b 0x2 5 >;
 
-		qcom,perfcl-speedbin4-v0 =
-			<   300000000 0x0004000f 0x01200020 0x1 1 >,
-			<  1113600000 0x0404003a 0x052e002e 0x1 2 >,
-			<  1401600000 0x04040049 0x073a003a 0x2 3 >,
-			<  1747200000 0x0404005b 0x09480048 0x2 4 >,
-			<  1958400000 0x04040066 0x0a510051 0x2 5 >;
-
 		qcom,up-timer = <1000 1000>;
 		qcom,down-timer = <1000 1000>;
+		qcom,pc-override-index = <0 0>;
 		qcom,set-ret-inactive;
 		qcom,enable-llm-freq-vote;
 		qcom,llm-freq-up-timer = <327675 327675>;
@@ -1576,12 +1633,11 @@
 		};
 	};
 
-	qcom,rmtfs_sharedmem@0 {
+	qcom,rmtfs_sharedmem@85e00000 {
 		compatible = "qcom,sharedmem-uio";
-		reg = <0x0 0x200000>;
+		reg = <0x85e00000 0x200000>;
 		reg-names = "rmtfs";
 		qcom,client-id = <0x00000001>;
-		qcom,guard-memory;
 	};
 
 	qcom,rmnet-ipa {
@@ -1733,7 +1789,6 @@
 		qcom,irq-mask = <0x200>;
 		interrupts = <0 157 1>;
 		label = "lpass";
-		cpu-affinity = <1 2>;
 		qcom,qos-config = <&glink_qos_adsp>;
 		qcom,ramp-time = <0xaf>;
 	};
@@ -2003,7 +2058,6 @@
 	qcom,lpass@15700000 {
 		compatible = "qcom,pil-tz-generic";
 		reg = <0x15700000 0x00100>;
-		reg-names = "base_reg";
 		interrupts = <0 162 1>;
 
 		vdd_cx-supply = <&pm660l_l9_level>;
@@ -2036,7 +2090,6 @@
 	qcom,turing@1a300000 {
 		compatible = "qcom,pil-tz-generic";
 		reg = <0x1a300000 0x00100>;
-		reg-names = "base_reg";
 		interrupts = <0 518 1>;
 
 		vdd_cx-supply = <&pm660l_s3_level>;
@@ -2108,7 +2161,6 @@
 		qcom,qdsp6v62-1-5;
 		memory-region = <&modem_fw_mem>;
 		qcom,mem-protect-id = <0xF>;
-		qcom,complete-ramdump;
 		qcom,cx-ipeak-vote;
 
 		/* GPIO inputs from mss */
@@ -2211,7 +2263,7 @@
 
 	qcom_seecom: qseecom@86d00000 {
 		compatible = "qcom,qseecom";
-		reg = <0x86d00000 0x2200000>;
+		reg = <0x86d00000 0x3E00000>;
 		reg-names = "secapp-region";
 		qcom,hlos-num-ce-hw-instances = <1>;
 		qcom,hlos-ce-hw-instance = <0>;
@@ -2413,10 +2465,6 @@
 		"HS_RA_G1_L1", "HS_RA_G2_L1", "HS_RA_G3_L1",
 		"HS_RB_G1_L1", "HS_RB_G2_L1", "HS_RB_G3_L1",
 		"MAX";
-
-		pinctrl-names = "dev-reset-assert", "dev-reset-deassert";
-		pinctrl-0 = <&ufs_dev_reset_assert>;
-		pinctrl-1 = <&ufs_dev_reset_deassert>;
 
 		resets = <&clock_gcc GCC_UFS_BCR>;
 		reset-names = "core_reset";

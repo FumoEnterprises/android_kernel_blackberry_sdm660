@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015-2017, 2019 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2015-2017, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -370,6 +370,9 @@
 
 	hostless: qcom,msm-pcm-hostless {
 		compatible = "qcom,msm-pcm-hostless";
+		audio_test_mod {
+			compatible = "qcom,audio-test-mod";
+		};
 	};
 
 	dai_pri_auxpcm: qcom,msm-pri-auxpcm {
@@ -598,13 +601,6 @@
 			<0x150f7010 0x4>;
 		reg-names = "avtimer_lsb_addr", "avtimer_msb_addr";
 		qcom,clk-div = <27>;
-	};
-
-	qcom,msm-audio-apr {
-		compatible = "qcom,msm-audio-apr";
-		msm_audio_apr_dummy {
-			compatible = "qcom,msm-audio-apr-dummy";
-		};
 	};
 
 	tasha_snd: sound-9335 {
@@ -840,8 +836,8 @@
 			"RX_BIAS", "INT_MCLK0",
 			"SPK_RX_BIAS", "INT_MCLK0",
 			"INT_LDO_H", "INT_MCLK0",
-      "RX_I2S_CLK", "INT_MCLK0",
-      "TX_I2S_CLK", "INT_MCLK0",
+			"RX_I2S_CLK", "INT_MCLK0",
+			"TX_I2S_CLK", "INT_MCLK0",
 			"MIC BIAS External", "Handset Mic",
 			"MIC BIAS External2", "Headset Mic",
 			"MIC BIAS External", "Secondary Mic",

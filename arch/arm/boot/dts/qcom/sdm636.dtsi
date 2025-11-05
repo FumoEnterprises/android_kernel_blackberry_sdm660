@@ -25,19 +25,43 @@
 			no-map;
 			reg = <0x0 0x94a00000 0x0 0x100000>;
 		};
+/* start:BBRY_ANDROID : adjust addresses based Luna memory size */
+		reset_mem: reset_mem@0 {
+			oem,reg = <0x00000001 0x7E3BB000 0x00000000 0x00001000>;
+			oem,reg-ddt = <0x00000001 0x7E33F000 0x00000000 0x00001000>;
+		};
+		reset_log_mem: reset_log_mem@0 {
+			oem,reg = <0x00000001 0x7E3BC000 0x00000000 0x00004000>;
+			oem,reg-ddt = <0x00000001 0x7E340000 0x00000000 0x00080000>;
+		};
+/* end:BBRY_ANDROID */
 	};
 };
 
 &soc {
 	/delete-node/ qcom,turing@1a300000;
 
-	/delete-node/ qcom,msm-cdsp-loader;
 	/delete-node/ cti@7068000;
 	/delete-node/ turing_etm0;
 	funnel@6042000 {
 		ports {
 			/delete-node/ port@4;
 		};
+	};
+};
+
+&soc {
+	/delete-node/ arm,smmu-turing_q6@5180000;
+	qcom,msm_fastrpc {
+		/delete-node/ qcom,msm_fastrpc_compute_cb5;
+		/delete-node/ qcom,msm_fastrpc_compute_cb6;
+		/delete-node/ qcom,msm_fastrpc_compute_cb7;
+		/delete-node/ qcom,msm_fastrpc_compute_cb8;
+		/delete-node/ qcom,msm_fastrpc_compute_cb9;
+		/delete-node/ qcom,msm_fastrpc_compute_cb10;
+		/delete-node/ qcom,msm_fastrpc_compute_cb11;
+		/delete-node/ qcom,msm_fastrpc_compute_cb12;
+		/delete-node/ qcom,msm_fastrpc_compute_cb13;
 	};
 
 	devfreq_memlat_4: qcom,arm-memlat-mon-4 {
@@ -55,21 +79,6 @@
 				< 1747200 2929 >,
 				< 1804800 5163 >;
 		};
-	};
-};
-
-&soc {
-	/delete-node/ arm,smmu-turing_q6@5180000;
-	qcom,msm_fastrpc {
-		/delete-node/ qcom,msm_fastrpc_compute_cb5;
-		/delete-node/ qcom,msm_fastrpc_compute_cb6;
-		/delete-node/ qcom,msm_fastrpc_compute_cb7;
-		/delete-node/ qcom,msm_fastrpc_compute_cb8;
-		/delete-node/ qcom,msm_fastrpc_compute_cb9;
-		/delete-node/ qcom,msm_fastrpc_compute_cb10;
-		/delete-node/ qcom,msm_fastrpc_compute_cb11;
-		/delete-node/ qcom,msm_fastrpc_compute_cb12;
-		/delete-node/ qcom,msm_fastrpc_compute_cb13;
 	};
 };
 

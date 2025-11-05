@@ -1,4 +1,4 @@
-/* Copyright (c) 2013-2018, 2020, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2013-2017, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -23,7 +23,7 @@
 #include "mdss_dsi_clk.h"
 #include <linux/interrupt.h>
 
-#define MAX_RECOVERY_TRIALS 3
+#define MAX_RECOVERY_TRIALS 10
 #define MAX_SESSIONS 2
 
 #define SPLIT_MIXER_OFFSET 0x800
@@ -33,9 +33,6 @@
 #define CMD_MODE_IDLE_TIMEOUT msecs_to_jiffies(16 * 4)
 #define INPUT_EVENT_HANDLER_DELAY_USECS (16000 * 4)
 #define AUTOREFRESH_MAX_FRAME_CNT 6
-
-//SW4-HL-Display-BBox-04+_20161227
-#define BBOX_LCM_WAIT4PINGPONG_TIMEOUT do {printk("BBox;%s: LCM wait4pingpong timeout\n", __func__); printk("BBox::UEC;0::4\n");} while (0);
 
 static DEFINE_MUTEX(cmd_clk_mtx);
 
@@ -741,16 +738,8 @@ int mdss_mdp_resource_control(struct mdss_mdp_ctl *ctl, u32 sw_event)
 	int rc = 0;
 	bool schedule_off = false;
 
-	if (!ctl) {
-		pr_err("%s invalid ctl\n", __func__);
-		rc = -EINVAL;
-		goto exit;
-	}
-
 	/* Get both controllers in the correct order for dual displays */
-	rc = mdss_mdp_get_split_display_ctls(&ctl, &sctl);
-	if (rc)
-		goto exit;
+	mdss_mdp_get_split_display_ctls(&ctl, &sctl);
 
 	ctx = (struct mdss_mdp_cmd_ctx *) ctl->intf_ctx[MASTER_CTX];
 	if (!ctx) {
@@ -907,7 +896,7 @@ int mdss_mdp_resource_control(struct mdss_mdp_ctl *ctl, u32 sw_event)
 				schedule_work(&ctx->gate_clk_work);
 
 			/* start work item to shut down after delay */
-			queue_delayed_work(system_power_efficient_wq,
+			schedule_delayed_work(
 					&ctx->delayed_off_clk_work,
 					CMD_MODE_IDLE_TIMEOUT);
 		}
@@ -1071,8 +1060,7 @@ int mdss_mdp_resource_control(struct mdss_mdp_ctl *ctl, u32 sw_event)
 			 * reached. This is to prevent the case where early wake
 			 * up is called but no frame update is sent.
 			 */
-			queue_delayed_work(system_power_efficient_wq,
-                                &ctx->delayed_off_clk_work,
+			schedule_delayed_work(&ctx->delayed_off_clk_work,
 				      CMD_MODE_IDLE_TIMEOUT);
 			pr_debug("off work scheduled\n");
 		}
@@ -2103,7 +2091,7 @@ static int mdss_mdp_cmd_wait4pingpong(struct mdss_mdp_ctl *ctl, void *arg)
 	struct mdss_mdp_cmd_ctx *ctx;
 	struct mdss_panel_data *pdata;
 	unsigned long flags;
-	int rc = 0;
+	int rc = 0, te_irq;
 
 	ctx = (struct mdss_mdp_cmd_ctx *) ctl->intf_ctx[MASTER_CTX];
 	if (!ctx) {
@@ -2159,7 +2147,8 @@ static int mdss_mdp_cmd_wait4pingpong(struct mdss_mdp_ctl *ctl, void *arg)
 				atomic_read(&ctx->koff_cnt));
 
 		/* enable TE irq to check if it is coming from the panel */
-		panel_update_te_irq(pdata, true);
+		te_irq = gpio_to_irq(pdata->panel_te_gpio);
+		enable_irq(te_irq);
 
 		/* wait for 20ms to ensure we are getting the next TE */
 		usleep_range(20000, 20010);
@@ -2168,11 +2157,14 @@ static int mdss_mdp_cmd_wait4pingpong(struct mdss_mdp_ctl *ctl, void *arg)
 		rc = wait_for_completion_timeout(&pdata->te_done, KOFF_TIMEOUT);
 
 		if (!rc) {
-			BBOX_LCM_WAIT4PINGPONG_TIMEOUT	//SW4-HL-Display-BBox-04+_20161227
 			MDSS_XLOG(0xbac);
 			mdss_fb_report_panel_dead(ctl->mfd);
 		} else if (ctx->pp_timeout_report_cnt == 0) {
 			MDSS_XLOG(0xbad);
+			MDSS_XLOG_TOUT_HANDLER("mdp", "dsi0_ctrl", "dsi0_phy",
+				"dsi1_ctrl", "dsi1_phy", "vbif", "vbif_nrt",
+				"dbg_bus", "vbif_dbg_bus",
+				"dsi_dbg_bus", "panic");
 		} else if (ctx->pp_timeout_report_cnt == MAX_RECOVERY_TRIALS) {
 			MDSS_XLOG(0xbad2);
 			MDSS_XLOG_TOUT_HANDLER("mdp", "dsi0_ctrl", "dsi0_phy",
@@ -2183,7 +2175,7 @@ static int mdss_mdp_cmd_wait4pingpong(struct mdss_mdp_ctl *ctl, void *arg)
 		}
 
 		/* disable te irq */
-		panel_update_te_irq(pdata, false);
+		disable_irq_nosync(te_irq);
 
 		ctx->pp_timeout_report_cnt++;
 		rc = -EPERM;

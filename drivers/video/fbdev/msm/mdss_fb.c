@@ -1,7 +1,7 @@
 /*
  * Core MDSS framebuffer driver.
  *
- * Copyright (c) 2008-2020, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2008-2017, The Linux Foundation. All rights reserved.
  * Copyright (C) 2007 Google Incorporated
  *
  * This software is licensed under the terms of the GNU General Public
@@ -56,11 +56,9 @@
 #include "mdss_smmu.h"
 #include "mdss_mdp.h"
 
-//SW4-HL-Display-GlanceMode-00+{_20170524
-#ifdef CONFIG_AOD_FEATURE
-#include "fih/fih_msm_mdss_aod.h"
-#endif
-//SW4-HL-Display-GlanceMode-00+}_20170524
+#include "mdss_dsi_cmd.h"
+#include "mdss_dsi.h"
+
 
 #ifdef CONFIG_FB_MSM_TRIPLE_BUFFER
 #define MDSS_FB_NUM 3
@@ -90,11 +88,6 @@
 
 static struct fb_info *fbi_list[MAX_FBI_LIST];
 static int fbi_list_index;
-
-//SW4-HL-Display-GlanceMode-00+{_20170524
-struct msm_fb_data_type *mfd_glance = NULL;     //glance
-EXPORT_SYMBOL(mfd_glance);
-//SW4-HL-Display-GlanceMode-00+}_20170524
 
 static u32 mdss_fb_pseudo_palette[16] = {
 	0x00000000, 0xffffffff, 0xffffffff, 0xffffffff,
@@ -143,13 +136,6 @@ static inline uint64_t __user to_user_u64(void *ptr)
 {
 	return (uint64_t)((uintptr_t)ptr);
 }
-
-//SW4-HL-Display-GlanceMode-00+{_20170524
-#ifdef CONFIG_AOD_FEATURE
-extern int fih_set_blank_mode(int mode);
-extern int fih_get_aod(void);
-#endif
-//SW4-HL-Display-GlanceMode-00+}_20170524
 
 void mdss_fb_no_update_notify_timer_cb(unsigned long data)
 {
@@ -536,16 +522,11 @@ static void __mdss_fb_idle_notify_work(struct work_struct *work)
 
 	/* Notify idle-ness here */
 	pr_debug("Idle timeout %dms expired!\n", mfd->idle_time);
-
-	mfd->idle_state = MDSS_FB_IDLE;
-	/*
-	 * idle_notify node events are used to reduce MDP load when idle,
-	 * this is not needed for command mode panels.
-	 */
-	if (mfd->idle_time && mfd->panel.type != MIPI_CMD_PANEL)
+	if (mfd->idle_time)
 		sysfs_notify(&mfd->fbi->dev->kobj, NULL, "idle_notify");
-	sysfs_notify(&mfd->fbi->dev->kobj, NULL, "idle_state");
+	mfd->idle_state = MDSS_FB_IDLE;
 }
+
 
 static ssize_t mdss_fb_get_fps_info(struct device *dev,
 		struct device_attribute *attr, char *buf)
@@ -607,26 +588,6 @@ static ssize_t mdss_fb_get_idle_notify(struct device *dev,
 	return ret;
 }
 
-static ssize_t mdss_fb_get_idle_state(struct device *dev,
-		struct device_attribute *attr, char *buf)
-{
-	struct fb_info *fbi = dev_get_drvdata(dev);
-	struct msm_fb_data_type *mfd = fbi->par;
-	const char *state_strs[] = {
-		[MDSS_FB_NOT_IDLE] = "active",
-		[MDSS_FB_IDLE_TIMER_RUNNING] = "pending",
-		[MDSS_FB_IDLE] = "idle",
-	};
-	int state = mfd->idle_state;
-	const char *s;
-	if (state < ARRAY_SIZE(state_strs) && state_strs[state])
-		s = state_strs[state];
-	else
-		s = "invalid";
-
-	return scnprintf(buf, PAGE_SIZE, "%s\n", s);
-}
-
 static ssize_t mdss_fb_get_panel_info(struct device *dev,
 		struct device_attribute *attr, char *buf)
 {
@@ -653,7 +614,7 @@ static ssize_t mdss_fb_get_panel_info(struct device *dev,
 			"red_chromaticity_x=%d\nred_chromaticity_y=%d\n"
 			"green_chromaticity_x=%d\ngreen_chromaticity_y=%d\n"
 			"blue_chromaticity_x=%d\nblue_chromaticity_y=%d\n"
-			"panel_orientation=%d\ndyn_bitclk_en=%d\n",
+			"panel_orientation=%d\n",
 			pinfo->partial_update_enabled,
 			pinfo->roi_alignment.xstart_pix_align,
 			pinfo->roi_alignment.width_pix_align,
@@ -679,7 +640,7 @@ static ssize_t mdss_fb_get_panel_info(struct device *dev,
 			pinfo->hdr_properties.display_primaries[5],
 			pinfo->hdr_properties.display_primaries[6],
 			pinfo->hdr_properties.display_primaries[7],
-			pinfo->panel_orientation, pinfo->dynamic_bitclk);
+			pinfo->panel_orientation);
 
 	return ret;
 }
@@ -956,6 +917,154 @@ static ssize_t mdss_fb_idle_pc_notify(struct device *dev,
 	return scnprintf(buf, PAGE_SIZE, "idle power collapsed\n");
 }
 
+static char cmd2_open_code1[2] = {0x00, 0x00};
+static char cmd2_open_code2[4] = {0xff, 0x87, 0x07, 0x01};
+static char cmd2_open_code3[2] = {0x00, 0x80};
+static char cmd2_open_code4[3] = {0xff, 0x87, 0x07};
+static char cmd2_close_code1[2] = {0x00, 0x00};
+static char cmd2_close_code2[4] = {0xff, 0x00, 0x00, 0x00};
+static char cmd2_close_code3[2] = {0x00, 0x80};
+static char cmd2_close_code4[3] = {0xff, 0x00, 0x00};
+static struct dsi_cmd_desc fts_cmd2_open_cmd[] = {
+	{{DTYPE_GEN_LWRITE, 1, 0, 0, 0, sizeof(cmd2_open_code1)}, cmd2_open_code1},
+	{{DTYPE_GEN_LWRITE, 1, 0, 0, 0, sizeof(cmd2_open_code2)}, cmd2_open_code2},
+	{{DTYPE_GEN_LWRITE, 1, 0, 0, 0, sizeof(cmd2_open_code3)}, cmd2_open_code3},
+	{{DTYPE_GEN_LWRITE, 1, 0, 0, 0, sizeof(cmd2_open_code4)}, cmd2_open_code4},
+};
+static struct dsi_cmd_desc fts_cmd2_close_cmd[] = {
+	{{DTYPE_GEN_LWRITE, 1, 0, 0, 0, sizeof(cmd2_close_code1)}, cmd2_close_code1},
+	{{DTYPE_GEN_LWRITE, 1, 0, 0, 0, sizeof(cmd2_close_code2)}, cmd2_close_code2},
+	{{DTYPE_GEN_LWRITE, 1, 0, 0, 0, sizeof(cmd2_close_code3)}, cmd2_close_code3},
+	{{DTYPE_GEN_LWRITE, 1, 0, 0, 0, sizeof(cmd2_close_code4)}, cmd2_close_code4},
+};
+
+void fts_cmd2_enable(struct mdss_dsi_ctrl_pdata *ctrl, bool enable)
+{
+	struct dcs_cmd_req cmdreq;
+	struct mdss_panel_info *pinfo;
+
+	pinfo = &(ctrl->panel_data.panel_info);
+	if (pinfo->dcs_cmd_by_left && ctrl->ndx != DSI_CTRL_LEFT)
+		return;
+
+	memset(&cmdreq, 0, sizeof(cmdreq));
+	if (enable)
+		cmdreq.cmds = fts_cmd2_open_cmd;
+	else
+		cmdreq.cmds = fts_cmd2_close_cmd;
+	cmdreq.cmds_cnt = 4;
+	cmdreq.flags = CMD_REQ_COMMIT | CMD_REQ_LP_MODE;
+	cmdreq.rlen = 0;
+	cmdreq.cb = NULL;
+
+	mdss_dsi_cmdlist_put(ctrl, &cmdreq);
+}
+
+static int focaltech_sre_enable(struct mdss_dsi_ctrl_pdata *ctrl, int enable)
+{
+	struct dcs_cmd_req cmdreq;
+	struct dsi_cmd_desc cmds;
+	char cmds_buf[2] = {0};
+	int ret;
+
+	printk("focaltech_sre_enable: enable=%d\n", enable);
+	fts_cmd2_enable(ctrl, true);
+
+	memset(&cmdreq, 0, sizeof(cmdreq));
+	cmds_buf[0] = 0x92;
+	if (enable)
+		cmds_buf[1] = 0xa8;
+	else
+		cmds_buf[1] = 0;
+
+	cmds.dchdr.dtype = 0x15;
+	cmds.dchdr.vc = 0;
+	cmds.dchdr.ack = 0;
+	cmds.dchdr.wait = 0;
+	cmds.dchdr.last = 1;
+	cmds.dchdr.dlen = 2;
+	cmds.payload = cmds_buf;
+
+	cmdreq.cmds = &cmds;
+	cmdreq.cmds_cnt = 1;
+	cmdreq.flags = CMD_REQ_COMMIT | CMD_REQ_LP_MODE;
+	cmdreq.rlen = 0;
+	cmdreq.cb = NULL;
+
+	ret = mdss_dsi_cmdlist_put(ctrl, &cmdreq);
+
+	fts_cmd2_enable(ctrl, false);
+
+	return ret;
+}
+
+static int synaptics_sre_enable(struct mdss_dsi_ctrl_pdata *ctrl, int enable)
+{
+	struct dcs_cmd_req cmdreq;
+	struct dsi_cmd_desc cmds;
+	char cmds_buf[2] = {0};
+	int ret;
+
+	printk("synaptics_sre_enable: enable=%d\n", enable);
+
+	memset(&cmdreq, 0, sizeof(cmdreq));
+	cmds_buf[0] = 0x55;
+	if (enable)
+		cmds_buf[1] = 0x50;
+	else
+		cmds_buf[1] = 0x0;
+
+	cmds.dchdr.dtype = 0x15;
+	cmds.dchdr.vc = 0;
+	cmds.dchdr.ack = 0;
+	cmds.dchdr.wait = 0;
+	cmds.dchdr.last = 1;
+	cmds.dchdr.dlen = 2;
+	cmds.payload = cmds_buf;
+
+	cmdreq.cmds = &cmds;
+	cmdreq.cmds_cnt = 1;
+	cmdreq.flags = CMD_REQ_COMMIT | CMD_REQ_LP_MODE;
+	cmdreq.rlen = 0;
+	cmdreq.cb = NULL;
+
+	ret = mdss_dsi_cmdlist_put(ctrl, &cmdreq);
+
+	return ret;
+}
+
+static ssize_t sre_enable(struct device *dev,
+	struct device_attribute *attr, const char *buf, size_t count)
+{
+	struct fb_info *fbi = dev_get_drvdata(dev);
+	struct msm_fb_data_type *mfd = fbi->par;
+	struct mdss_panel_info *pinfo = mfd->panel_info;
+	struct mdss_panel_data *pdata =
+			container_of(pinfo, struct mdss_panel_data, panel_info);
+	char focaltech_lcd_name[] = "Livata video mode dsi panel";
+
+	int enable;
+	struct mdss_dsi_ctrl_pdata *ctrl = NULL;
+	int ret;
+
+	ctrl = container_of(pdata, struct mdss_dsi_ctrl_pdata,
+						panel_data);
+
+	if (sscanf(buf, "%d", &enable) != 1)
+		return -EINVAL;
+
+	if (enable < 0 || enable > 1)
+		return -EINVAL;
+
+	if (strcmp(pinfo->panel_name, focaltech_lcd_name) == 0)
+		ret = focaltech_sre_enable(ctrl, enable);
+	else
+		ret = synaptics_sre_enable(ctrl, enable);
+
+	return count;
+}
+
+
 static DEVICE_ATTR(msm_fb_type, S_IRUGO, mdss_fb_get_type, NULL);
 static DEVICE_ATTR(msm_fb_split, S_IRUGO | S_IWUSR, mdss_fb_show_split,
 					mdss_fb_store_split);
@@ -963,7 +1072,6 @@ static DEVICE_ATTR(show_blank_event, S_IRUGO, mdss_mdp_show_blank_event, NULL);
 static DEVICE_ATTR(idle_time, S_IRUGO | S_IWUSR | S_IWGRP,
 	mdss_fb_get_idle_time, mdss_fb_set_idle_time);
 static DEVICE_ATTR(idle_notify, S_IRUGO, mdss_fb_get_idle_notify, NULL);
-static DEVICE_ATTR(idle_state, S_IRUGO, mdss_fb_get_idle_state, NULL);
 static DEVICE_ATTR(msm_fb_panel_info, S_IRUGO, mdss_fb_get_panel_info, NULL);
 static DEVICE_ATTR(msm_fb_src_split_info, S_IRUGO, mdss_fb_get_src_split_info,
 	NULL);
@@ -978,6 +1086,8 @@ static DEVICE_ATTR(measured_fps, S_IRUGO | S_IWUSR | S_IWGRP,
 static DEVICE_ATTR(msm_fb_persist_mode, S_IRUGO | S_IWUSR,
 	mdss_fb_get_persist_mode, mdss_fb_change_persist_mode);
 static DEVICE_ATTR(idle_power_collapse, S_IRUGO, mdss_fb_idle_pc_notify, NULL);
+static DEVICE_ATTR(sre_enable, S_IRUGO|S_IRGRP|S_IWUSR|S_IWGRP, NULL, sre_enable);
+
 
 static struct attribute *mdss_fb_attrs[] = {
 	&dev_attr_msm_fb_type.attr,
@@ -985,7 +1095,6 @@ static struct attribute *mdss_fb_attrs[] = {
 	&dev_attr_show_blank_event.attr,
 	&dev_attr_idle_time.attr,
 	&dev_attr_idle_notify.attr,
-	&dev_attr_idle_state.attr,
 	&dev_attr_msm_fb_panel_info.attr,
 	&dev_attr_msm_fb_src_split_info.attr,
 	&dev_attr_msm_fb_thermal_level.attr,
@@ -994,6 +1103,7 @@ static struct attribute *mdss_fb_attrs[] = {
 	&dev_attr_measured_fps.attr,
 	&dev_attr_msm_fb_persist_mode.attr,
 	&dev_attr_idle_power_collapse.attr,
+	&dev_attr_sre_enable.attr,
 	NULL,
 };
 
@@ -1441,14 +1551,6 @@ static int mdss_fb_probe(struct platform_device *pdev)
 			pr_err("failed to register input handler\n");
 
 	INIT_DELAYED_WORK(&mfd->idle_notify_work, __mdss_fb_idle_notify_work);
-
-	//SW4-HL-Display-GlanceMode-00+{_20170524
-    mfd_glance = (struct msm_fb_data_type *)fbi_list[0]->par;
-	if(!mfd_glance->panel_info)
-	{
-		pr_err("%s: BossVee mfd_glance mfd -> panel_info is NULL,dms_mode is %d\n", __func__, mfd->panel_info->mipi.dms_mode);
-	}
-	//SW4-HL-Display-GlanceMode-00+}_20170524
 
 	return rc;
 }
@@ -2057,11 +2159,6 @@ static int mdss_fb_blank_sub(int blank_mode, struct fb_info *info,
 	int ret = 0;
 	int cur_power_state, req_power_state = MDSS_PANEL_POWER_OFF;
 	char trace_buffer[32];
-	//SW4-HL-Display-GlanceMode-00+{_20170524
-	#ifdef CONFIG_AOD_FEATURE
-	struct mdss_panel_data *pdata;
-	#endif
-	//SW4-HL-Display-GlanceMode-00+}_20170524
 
 	if (!mfd || !op_enable)
 		return -EPERM;
@@ -2103,19 +2200,6 @@ static int mdss_fb_blank_sub(int blank_mode, struct fb_info *info,
 	case FB_BLANK_UNBLANK:
 		pr_debug("unblank called. cur pwr state=%d\n", cur_power_state);
 		ret = mdss_fb_blank_unblank(mfd);
-
-		//SW4-HL-Display-GlanceMode-00+{_20170524
-		#ifdef CONFIG_AOD_FEATURE
-		if (mfd->panel_info->aod_enabled)
-	 	{
-			if (mfd->panel_info->type == MIPI_CMD_PANEL)
-			{
-				pdata = dev_get_platdata(&mfd->pdev->dev);
-				fih_mdss_lp_config(pdata, 0, mfd->index);
-			}
-	 	}
-		#endif
-		//SW4-HL-Display-GlanceMode-00+}_20170524
 		break;
 	case BLANK_FLAG_ULP:
 		req_power_state = MDSS_PANEL_POWER_LP2;
@@ -2147,19 +2231,6 @@ static int mdss_fb_blank_sub(int blank_mode, struct fb_info *info,
 	case FB_BLANK_HSYNC_SUSPEND:
 	case FB_BLANK_POWERDOWN:
 	default:
-		//SW4-HL-Display-GlanceMode-FixAutoRebootAfterGlanceTimeOut-00+{_20170601
-		#ifdef CONFIG_AOD_FEATURE
-		if (mfd->panel_info->aod_enabled)
-		{
-			if (mfd->panel_info->type == MIPI_CMD_PANEL)
-			{
-				pdata = dev_get_platdata(&mfd->pdev->dev);
-				fih_mdss_lp_config(pdata, 0, mfd->index);
-			}
-		}
-		#endif
-		//SW4-HL-Display-GlanceMode-FixAutoRebootAfterGlanceTimeOut-00+}_20170601
-
 		req_power_state = MDSS_PANEL_POWER_OFF;
 		pr_debug("blank powerdown called\n");
 		ret = mdss_fb_blank_blank(mfd, req_power_state);
@@ -2186,15 +2257,6 @@ static int mdss_fb_blank(int blank_mode, struct fb_info *info)
 			mfd->index, ret);
 		return ret;
 	}
-
-	//SW4-HL-Display-GlanceMode-00+{_20170524
-	#ifdef CONFIG_AOD_FEATURE
-	if (mfd->panel_info->aod_enabled)
-	{
-		fih_set_blank_mode(blank_mode);
-	}
-	#endif
-	//SW4-HL-Display-GlanceMode-00+}_20170524
 
 	mutex_lock(&mfd->mdss_sysfs_lock);
 
@@ -3224,18 +3286,14 @@ static int __mdss_fb_sync_buf_done_callback(struct notifier_block *p,
 			ret = __mdss_fb_wait_for_fence_sub(sync_pt_data,
 				sync_pt_data->temp_fen, fence_cnt);
 		}
-		if (mfd->idle_time) {
-			if (!mod_delayed_work(system_wq,
+		if (mfd->idle_time && !mod_delayed_work(system_wq,
 					&mfd->idle_notify_work,
 					msecs_to_jiffies(mfd->idle_time)))
-				pr_debug("fb%d: restarted idle work\n",
-						mfd->index);
-			mfd->idle_state = MDSS_FB_IDLE_TIMER_RUNNING;
-		} else {
-			mfd->idle_state = MDSS_FB_IDLE;
-		}
+			pr_debug("fb%d: restarted idle work\n",
+					mfd->index);
 		if (ret == -ETIME)
 			ret = NOTIFY_BAD;
+		mfd->idle_state = MDSS_FB_IDLE_TIMER_RUNNING;
 		break;
 	case MDP_NOTIFY_FRAME_FLUSHED:
 		pr_debug("%s: frame flushed\n", sync_pt_data->fence_name);
@@ -3604,19 +3662,16 @@ static int mdss_fb_pan_display(struct fb_var_screeninfo *var,
 {
 	struct mdp_display_commit disp_commit;
 	struct msm_fb_data_type *mfd = (struct msm_fb_data_type *)info->par;
-	struct mdss_data_type *mdata = mfd_to_mdata(mfd);
 
 	/*
-	 * Abort pan_display operations in following cases:
-	 * 1. during mode switch through mode sysfs node, it will trigger a
-	 *    pan_display after switch. This assumes that fb has been adjusted,
-	 *    however when using overlays we may not have the right size at this
-	 *    point, so it needs to go through PREPARE first.
-	 * 2. When the splash handoff is pending.
+	 * during mode switch through mode sysfs node, it will trigger a
+	 * pan_display after switch. This assumes that fb has been adjusted,
+	 * however when using overlays we may not have the right size at this
+	 * point, so it needs to go through PREPARE first. Abort pan_display
+	 * operations until that happens
 	 */
-	if ((mfd->switch_state != MDSS_MDP_NO_UPDATE_REQUESTED) ||
-		(mdss_fb_is_hdmi_primary(mfd) && mdata->handoff_pending)) {
-		pr_debug("fb%d: pan_display skipped during switch or handoff\n",
+	if (mfd->switch_state != MDSS_MDP_NO_UPDATE_REQUESTED) {
+		pr_debug("fb%d: pan_display skipped during switch\n",
 				mfd->index);
 		return 0;
 	}
@@ -3767,32 +3822,6 @@ void mdss_panelinfo_to_fb_var(struct mdss_panel_info *pinfo,
 		var->width = pinfo->physical_width;
 	if (pinfo->physical_height)
 		var->height = pinfo->physical_height;
-
-	//SW4-HL-Display-CTS_Xdpi_Ydpi-00+{_20151112
-	if (pinfo->physical_width_full)
-	{
-		var->width = pinfo->physical_width_full;
-	}
-	else
-	{
-		if (pinfo->physical_width)
-		{
-			var->width = pinfo->physical_width;
-		}
-	}
-
-	if (pinfo->physical_height_full)
-	{
-		var->height = pinfo->physical_height_full;
-	}
-	else
-	{
-		if (pinfo->physical_height)
-		{
-			var->height = pinfo->physical_height;
-		}
-	}
-	//SW4-HL-Display-CTS_Xdpi_Ydpi-00+}_20151112
 
 	pr_debug("ScreenInfo: res=%dx%d [%d, %d] [%d, %d]\n",
 		var->xres, var->yres, var->left_margin,
@@ -4198,23 +4227,17 @@ static int mdss_fb_set_par(struct fb_info *info)
 		mfd->fbi->fix.smem_len = PAGE_ALIGN(mfd->fbi->fix.line_length *
 				mfd->fbi->var.yres) * mfd->fb_page;
 
-	old_format = mfd->panel_info->out_format;
-	mfd->panel_info->out_format =
-			mdss_grayscale_to_mdp_format(var->grayscale);
-	if (!IS_ERR_VALUE(mfd->panel_info->out_format)) {
+	old_format = mdss_grayscale_to_mdp_format(var->grayscale);
+	if (!IS_ERR_VALUE(old_format)) {
 		if (old_format != mfd->panel_info->out_format)
 			mfd->panel_reconfig = true;
 	}
-
-	if (mdss_fb_is_hdmi_primary(mfd) && mfd->panel_reconfig)
-		mfd->force_null_commit = true;
 
 	if (mfd->panel_reconfig || (mfd->fb_imgType != old_imgType)) {
 		mdss_fb_blank_sub(FB_BLANK_POWERDOWN, info, mfd->op_enable);
 		mdss_fb_var_to_panelinfo(var, mfd->panel_info);
 		mdss_fb_blank_sub(FB_BLANK_UNBLANK, info, mfd->op_enable);
 		mfd->panel_reconfig = false;
-		mfd->force_null_commit = false;
 	}
 
 	return ret;
@@ -4794,7 +4817,6 @@ static int mdss_fb_atomic_commit_ioctl(struct fb_info *info,
 	struct mdp_destination_scaler_data __user *ds_data_user;
 	struct msm_fb_data_type *mfd;
 	struct mdss_overlay_private *mdp5_data = NULL;
-	struct mdss_data_type *mdata;
 
 	ret = copy_from_user(&commit, argp, sizeof(struct mdp_layer_commit));
 	if (ret) {
@@ -4845,7 +4867,6 @@ static int mdss_fb_atomic_commit_ioctl(struct fb_info *info,
 	input_layer_list = commit.commit_v1.input_layers;
 
 	if (layer_count > MAX_LAYER_COUNT) {
-		pr_err("invalid layer count :%d\n", layer_count);
 		ret = -EINVAL;
 		goto err;
 	} else if (layer_count) {
@@ -4897,13 +4918,6 @@ static int mdss_fb_atomic_commit_ioctl(struct fb_info *info,
 	ds_data_user = commit.commit_v1.dest_scaler;
 	if ((ds_data_user) &&
 		(commit.commit_v1.dest_scaler_cnt)) {
-		mdata = mfd_to_mdata(mfd);
-		if (!mdata || !mdata->scaler_off ||
-				 !mdata->scaler_off->has_dest_scaler) {
-			pr_err("dest scaler not supported\n");
-			ret = -EPERM;
-			goto err;
-		}
 		ret = __mdss_fb_copy_destscaler_data(info, &commit);
 		if (ret) {
 			pr_err("copy dest scaler failed\n");
@@ -5043,13 +5057,7 @@ exit:
  * This function is used to change from DSI mode based on the
  * argument @mode on the next frame to be displayed.
  */
-//SW4-HL-Display-GlanceMode-00*{_20170524
- #ifdef CONFIG_AOD_FEATURE
-/*static*/ int mdss_fb_mode_switch(struct msm_fb_data_type *mfd, u32 mode)
-#else
 static int mdss_fb_mode_switch(struct msm_fb_data_type *mfd, u32 mode)
-#endif
-//SW4-HL-Display-GlanceMode-00*}_20170524
 {
 	struct mdss_panel_info *pinfo = NULL;
 	int ret = 0;
@@ -5057,22 +5065,10 @@ static int mdss_fb_mode_switch(struct msm_fb_data_type *mfd, u32 mode)
 	if (!mfd || !mfd->panel_info)
 		return -EINVAL;
 
-	//SW4-HL-Display-GlanceMode-00*{_20170524
-	if (mfd->panel_info->aod_enabled)
-	{
-		//glance
-		/* make sure that we are idle while switching */
-		//mdss_fb_wait_for_kickoff(mfd);
-		pinfo = mfd->panel_info;
-		pr_info("%s: dms_mode = %d\n", __func__, pinfo->mipi.dms_mode);
-	}
-	else
-	{
-		/* make sure that we are idle while switching */
-		mdss_fb_wait_for_kickoff(mfd);
-		pinfo = mfd->panel_info;
-	}
-	//SW4-HL-Display-GlanceMode-00*}_20170524
+	/* make sure that we are idle while switching */
+	mdss_fb_wait_for_kickoff(mfd);
+
+	pinfo = mfd->panel_info;
 	if (pinfo->mipi.dms_mode == DYNAMIC_MODE_SWITCH_SUSPEND_RESUME) {
 		ret = mdss_fb_blanking_mode_switch(mfd, mode);
 	} else if (pinfo->mipi.dms_mode == DYNAMIC_MODE_SWITCH_IMMEDIATE) {

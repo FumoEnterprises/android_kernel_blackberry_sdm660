@@ -1,5 +1,0 @@
-&i2c_2 {
-	smb1351-charger@1d {
-		status = "disabled";
-	};
-};

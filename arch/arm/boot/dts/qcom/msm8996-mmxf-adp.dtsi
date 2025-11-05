@@ -1,4 +1,4 @@
-/* Copyright (c) 2015-2019, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2015-2017, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -447,13 +447,6 @@
 };
 
 &soc {
-	qcom,msm-audio-apr {
-		compatible = "qcom,msm-audio-apr";
-		msm_audio_apr_dummy {
-			compatible = "qcom,msm-audio-apr-dummy";
-		};
-	};
-
 	i2c@75ba000 {
 		synaptics@20 {
 			compatible = "synaptics,dsx";
@@ -531,14 +524,14 @@
 		asoc-platform = <&pcm0>, <&pcm1>, <&pcm2>, <&voip>, <&voice>,
 				<&loopback>, <&compress>, <&hostless>,
 				<&afe>, <&lsm>, <&routing>, <&pcmnoirq>,
-				<&loopback1>, <&pcm_dtmf>;
+				<&loopback1>;
 		asoc-platform-names = "msm-pcm-dsp.0", "msm-pcm-dsp.1",
 				"msm-pcm-dsp.2", "msm-voip-dsp",
 				"msm-pcm-voice", "msm-pcm-loopback",
 				"msm-compress-dsp", "msm-pcm-hostless",
 				"msm-pcm-afe", "msm-lsm-client",
 				"msm-pcm-routing", "msm-pcm-dsp-noirq",
-				"msm-pcm-loopback.1", "msm-pcm-dtmf";
+				"msm-pcm-loopback.1";
 		asoc-cpu = <&dai_pri_auxpcm>, <&dai_sec_auxpcm>, <&dai_hdmi>,
 				<&dai_mi2s_sec>, <&dai_mi2s>, <&dai_mi2s_quat>,
 				<&afe_pcm_rx>, <&afe_pcm_tx>,
@@ -549,8 +542,6 @@
 				<&dai_pri_tdm_tx_2>, <&dai_pri_tdm_tx_3>,
 				<&dai_pri_tdm_rx_0>, <&dai_pri_tdm_rx_1>,
 				<&dai_pri_tdm_rx_2>, <&dai_pri_tdm_rx_3>,
-				<&dai_sec_tdm_rx_0>, <&dai_sec_tdm_rx_1>,
-				<&dai_sec_tdm_rx_2>, <&dai_sec_tdm_rx_3>,
 				<&dai_sec_tdm_tx_0>, <&dai_sec_tdm_tx_1>,
 				<&dai_sec_tdm_tx_2>, <&dai_sec_tdm_tx_3>,
 				<&dai_tert_tdm_rx_0>, <&dai_tert_tdm_rx_1>,
@@ -561,19 +552,7 @@
 				<&dai_quat_tdm_rx_1>, <&dai_quat_tdm_rx_2>,
 				<&dai_quat_tdm_rx_3>, <&dai_quat_tdm_tx_0>,
 				<&dai_quat_tdm_tx_1>, <&dai_quat_tdm_tx_2>,
-				<&dai_quat_tdm_tx_3>, <&dai_sec_mi2s_rx_1>,
-				<&dai_sec_mi2s_rx_2>, <&dai_sec_mi2s_rx_3>,
-				<&dai_sec_mi2s_rx_4>, <&dai_sec_mi2s_tx_1>,
-				<&dai_sec_mi2s_tx_2>, <&dai_sec_mi2s_tx_3>,
-				<&dai_sec_mi2s_tx_4>, <&dai_tert_mi2s_rx_1>,
-				<&dai_tert_mi2s_rx_2>, <&dai_tert_mi2s_rx_3>,
-				<&dai_tert_mi2s_rx_4>, <&dai_tert_mi2s_tx_1>,
-				<&dai_tert_mi2s_tx_2>, <&dai_tert_mi2s_tx_3>,
-				<&dai_tert_mi2s_tx_4>, <&dai_quat_mi2s_rx_1>,
-				<&dai_quat_mi2s_rx_2>, <&dai_quat_mi2s_rx_3>,
-				<&dai_quat_mi2s_rx_4>, <&dai_quat_mi2s_tx_1>,
-				<&dai_quat_mi2s_tx_2>, <&dai_quat_mi2s_tx_3>,
-				<&dai_quat_mi2s_tx_4>;
+				<&dai_quat_tdm_tx_3>;
 		asoc-cpu-names = "msm-dai-q6-auxpcm.1", "msm-dai-q6-auxpcm.2",
 				"msm-dai-q6-hdmi.8", "msm-dai-q6-mi2s.1",
 				"msm-dai-q6-mi2s.2", "msm-dai-q6-mi2s.3",
@@ -585,8 +564,6 @@
 				"msm-dai-q6-tdm.36869", "msm-dai-q6-tdm.36871",
 				"msm-dai-q6-tdm.36864", "msm-dai-q6-tdm.36866",
 				"msm-dai-q6-tdm.36868", "msm-dai-q6-tdm.36870",
-				"msm-dai-q6-tdm.36880", "msm-dai-q6-tdm.36882",
-				"msm-dai-q6-tdm.36884", "msm-dai-q6-tdm.36886",
 				"msm-dai-q6-tdm.36881", "msm-dai-q6-tdm.36883",
 				"msm-dai-q6-tdm.36885", "msm-dai-q6-tdm.36887",
 				"msm-dai-q6-tdm.36896", "msm-dai-q6-tdm.36898",
@@ -597,19 +574,7 @@
 				"msm-dai-q6-tdm.36914", "msm-dai-q6-tdm.36916",
 				"msm-dai-q6-tdm.36918", "msm-dai-q6-tdm.36913",
 				"msm-dai-q6-tdm.36915", "msm-dai-q6-tdm.36917",
-				"msm-dai-q6-tdm.36919", "msm-dai-q6-mi2s.4160",
-				"msm-dai-q6-mi2s.4162", "msm-dai-q6-mi2s.4164",
-				"msm-dai-q6-mi2s.4166", "msm-dai-q6-mi2s.4161",
-				"msm-dai-q6-mi2s.4163", "msm-dai-q6-mi2s.4165",
-				"msm-dai-q6-mi2s.4167", "msm-dai-q6-mi2s.4168",
-				"msm-dai-q6-mi2s.4170", "msm-dai-q6-mi2s.4172",
-				"msm-dai-q6-mi2s.4174", "msm-dai-q6-mi2s.4169",
-				"msm-dai-q6-mi2s.4171", "msm-dai-q6-mi2s.4173",
-				"msm-dai-q6-mi2s.4175", "msm-dai-q6-mi2s.4128",
-				"msm-dai-q6-mi2s.4130", "msm-dai-q6-mi2s.4132",
-				"msm-dai-q6-mi2s.4134", "msm-dai-q6-mi2s.4129",
-				"msm-dai-q6-mi2s.4131", "msm-dai-q6-mi2s.4133",
-				"msm-dai-q6-mi2s.4135";
+				"msm-dai-q6-tdm.36919";
 		asoc-codec = <&stub_codec>;
 		asoc-codec-names = "msm-stub-codec.1";
 	};
@@ -617,10 +582,6 @@
 	loopback1: qcom,msm-pcm-loopback-low-latency {
 		compatible = "qcom,msm-pcm-loopback";
 		qcom,msm-pcm-loopback-low-latency;
-	};
-
-	pcm_dtmf: qcom,msm-pcm-dtmf {
-		compatible = "qcom,msm-pcm-dtmf";
 	};
 
 	qcom,msm-dai-mi2s {

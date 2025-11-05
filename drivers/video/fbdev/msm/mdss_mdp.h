@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2020, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2012-2017, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -57,7 +57,7 @@
 #define C0_G_Y		0	/* G/luma */
 
 /* wait for at most 2 vsync for lowest refresh rate (24hz) */
-#define KOFF_TIMEOUT_MS 200	//Orig - 84	//SW4-HL-Display-GlanceMode-00*_20170524
+#define KOFF_TIMEOUT_MS 84
 #define KOFF_TIMEOUT msecs_to_jiffies(KOFF_TIMEOUT_MS)
 
 #define OVERFETCH_DISABLE_TOP		BIT(0)
@@ -86,7 +86,7 @@
 
 #define XIN_HALT_TIMEOUT_US	0x4000
 
-#define MAX_LAYER_COUNT		0xD
+#define MAX_LAYER_COUNT		0xC
 
 /* For SRC QSEED3, when user space does not send the scaler information,
  * this flag allows pixel _extension to be programmed when scaler is disabled
@@ -271,15 +271,10 @@ enum mdss_mdp_csc_type {
 	MDSS_MDP_CSC_RGB2YUV_601L,
 	MDSS_MDP_CSC_RGB2YUV_601FR,
 	MDSS_MDP_CSC_RGB2YUV_709L,
-	MDSS_MDP_CSC_RGB2YUV_709FR,
 	MDSS_MDP_CSC_RGB2YUV_2020L,
 	MDSS_MDP_CSC_RGB2YUV_2020FR,
 	MDSS_MDP_CSC_YUV2YUV,
 	MDSS_MDP_CSC_RGB2RGB,
-#if defined(CONFIG_PXLW_IRIS3)
-	MDSS_MDP_CSC_YCoCg,
-#endif
-	MDSS_MDP_CSC_RGB2RGB_L,
 	MDSS_MDP_MAX_CSC
 };
 
@@ -938,7 +933,6 @@ struct mdss_mdp_writeback_arg {
 struct mdss_mdp_wfd;
 
 struct mdss_overlay_private {
-	bool vsync_en;
 	ktime_t vsync_time;
 	ktime_t lineptr_time;
 	struct kernfs_node *vsync_event_sd;
@@ -1768,7 +1762,7 @@ int mdss_mdp_ctl_start(struct mdss_mdp_ctl *ctl, bool handoff);
 int mdss_mdp_ctl_stop(struct mdss_mdp_ctl *ctl, int panel_power_mode);
 int mdss_mdp_ctl_intf_event(struct mdss_mdp_ctl *ctl, int event, void *arg,
 	u32 flags);
-int mdss_mdp_get_prefetch_lines(struct mdss_panel_info *pinfo, bool is_fixed);
+int mdss_mdp_get_prefetch_lines(struct mdss_panel_info *pinfo);
 int mdss_mdp_perf_bw_check(struct mdss_mdp_ctl *ctl,
 		struct mdss_mdp_pipe **left_plist, int left_cnt,
 		struct mdss_mdp_pipe **right_plist, int right_cnt);
@@ -1845,9 +1839,6 @@ int mdss_mdp_pipe_sspp_setup(struct mdss_mdp_pipe *pipe, u32 *op);
 int mdss_mdp_pp_sspp_config(struct mdss_mdp_pipe *pipe);
 int mdss_mdp_copy_layer_pp_info(struct mdp_input_layer *layer);
 void mdss_mdp_free_layer_pp_info(struct mdp_input_layer *layer);
-#if defined(CONFIG_PXLW_IRIS3)
-void mdss_mdp_sspp_csc_reset(struct mdss_mdp_pipe *pipe);
-#endif
 
 int mdss_mdp_smp_setup(struct mdss_data_type *mdata, u32 cnt, u32 size);
 
@@ -1944,7 +1935,6 @@ void mdss_mdp_data_calc_offset(struct mdss_mdp_data *data, u16 x, u16 y,
 	struct mdss_mdp_plane_sizes *ps, struct mdss_mdp_format_params *fmt);
 void mdss_mdp_format_flag_removal(u32 *table, u32 num, u32 remove_bits);
 struct mdss_mdp_format_params *mdss_mdp_get_format_params(u32 format);
-int mdss_mdp_get_ubwc_micro_dim(u32 format, u16 *w, u16 *h);
 int mdss_mdp_validate_offset_for_ubwc_format(
 	struct mdss_mdp_format_params *fmt, u16 x, u16 y);
 void mdss_mdp_get_v_h_subsample_rate(u8 chroma_samp,

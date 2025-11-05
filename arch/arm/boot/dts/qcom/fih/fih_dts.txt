@@ -1,2 +1,0 @@
-sdm630-cdp-c1n-preEVT.dts
-sdm660-cdp-c1n-preEVT.dts

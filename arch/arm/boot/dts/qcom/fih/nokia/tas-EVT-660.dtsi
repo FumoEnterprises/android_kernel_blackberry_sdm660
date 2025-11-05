@@ -1,6 +1,0 @@
-/* TAS EVT SDM660 */
-
-/* inherit preEVT Settings */
-#include "tas-preEVT-660.dtsi"
-
-/* Diff */

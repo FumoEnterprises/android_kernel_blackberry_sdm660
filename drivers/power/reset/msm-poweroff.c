@@ -35,8 +35,6 @@
 #include <soc/qcom/watchdog.h>
 #include <soc/qcom/minidump.h>
 
-#include "../../../drivers/fih/fih_rere.h"  /* FIH, to support fih reboot command */
-
 #define EMERGENCY_DLOAD_MAGIC1    0x322A4F99
 #define EMERGENCY_DLOAD_MAGIC2    0xC67E4350
 #define EMERGENCY_DLOAD_MAGIC3    0x77777777
@@ -74,8 +72,7 @@ static void scm_disable_sdi(void);
 
 static int in_panic;
 static int dload_type = SCM_DLOAD_FULLDUMP;
-// 20151002, disable download_mode by default
-static int download_mode = 0/*1*/;
+static int download_mode = 1;
 static struct kobject dload_kobj;
 static void *dload_mode_addr, *dload_type_addr;
 static bool dload_mode_enabled;
@@ -100,12 +97,9 @@ struct reset_attribute {
 	static struct reset_attribute reset_attr_##_name = \
 			__ATTR(_name, _mode, _show, _store)
 
-static int __init oem_dload_set(char *str);
-
 module_param_call(download_mode, dload_set, param_get_int,
 			&download_mode, 0644);
-__setup("download_mode=", oem_dload_set);
-			
+
 static int panic_prep_restart(struct notifier_block *this,
 			      unsigned long event, void *ptr)
 {
@@ -165,7 +159,6 @@ static bool get_dload_mode(void)
 
 static void enable_emergency_dload_mode(void)
 {
-#ifdef support_qcom_edl
 	int ret;
 
 	if (emergency_dload_mode_addr) {
@@ -187,9 +180,6 @@ static void enable_emergency_dload_mode(void)
 	ret = scm_set_dload_mode(SCM_EDLOAD_MODE, 0);
 	if (ret)
 		pr_err("Failed to set secure EDLOAD mode: %d\n", ret);
-#else
-  pr_err("dload mode is not enabled on target\n");
-#endif
 }
 
 static int dload_set(const char *val, struct kernel_param *kp)
@@ -211,24 +201,6 @@ static int dload_set(const char *val, struct kernel_param *kp)
 
 	return 0;
 }
-
-static int __init oem_dload_set(char *str)
-{
-    int old_val = download_mode; 
-    get_option(&str, &download_mode);
-
-
-    if(download_mode != 0 && download_mode != 1){
-        download_mode = old_val;
-        return -EINVAL;
-    }
-    
-    pr_err("******%s check download_mode %d\n", __func__,download_mode);
-	set_dload_mode(download_mode);
-
-    return 1;
-}
-
 #else
 static void set_dload_mode(int on)
 {
@@ -245,20 +217,6 @@ static bool get_dload_mode(void)
 	return false;
 }
 #endif
-
-
-/* FIH, to support fih apr */
-unsigned int restart_reason_rd(void)
-{
-	return readl(restart_reason);
-}
-
-void restart_reason_wt(unsigned int rere)
-{
-  qpnp_pon_set_restart_reason(rere);
-	__raw_writel(0, restart_reason);
-}
-/* FIH, to support fih apr */
 
 static void scm_disable_sdi(void)
 {
@@ -336,10 +294,6 @@ static void msm_restart_prepare(const char *cmd)
 				(cmd != NULL && cmd[0] != '\0'));
 	}
 
-#ifdef CONFIG_QCOM_PRESERVE_MEM
-	need_warm_reset = true;
-#endif
-
 	/* Hard reset the PMIC unless memory contents must be maintained. */
 	if (need_warm_reset) {
 		qpnp_pon_system_pwr_off(PON_POWER_OFF_WARM_RESET);
@@ -348,7 +302,7 @@ static void msm_restart_prepare(const char *cmd)
 	}
 
 	if (cmd != NULL) {
-		if (!strncmp(cmd, "bootloader", 10) || !strncmp(cmd, "download", 8)) {
+		if (!strncmp(cmd, "bootloader", 10)) {
 			qpnp_pon_set_restart_reason(
 				PON_RESTART_REASON_BOOTLOADER);
 			__raw_writel(0x77665500, restart_reason);
@@ -452,6 +406,7 @@ static void do_msm_restart(enum reboot_mode reboot_mode, const char *cmd)
 		msm_trigger_wdog_bite();
 #endif
 
+	scm_disable_sdi();
 	halt_spmi_pmic_arbiter();
 	deassert_ps_hold();
 
