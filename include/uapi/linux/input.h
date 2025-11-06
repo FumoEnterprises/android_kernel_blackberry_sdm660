@@ -501,6 +501,12 @@ struct ff_effect {
 #define FF_EFFECT_MIN	FF_RUMBLE
 #define FF_EFFECT_MAX	FF_RAMP
 
+/*modified by yejunwen for hall,5233887,2017/08/30 */
+#ifdef CONFIG_SENSORS_HALL
+#define KEY_UNLOCK_COVER        250     /* 250, for LED/window cover type, unlock  */
+#define KEY_LOCK_LED_COVER      251     /* 251, for LED cover type, lock  */
+#endif
+
 /*
  * Force feedback periodic effect types
  */

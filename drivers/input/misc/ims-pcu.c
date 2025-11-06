@@ -1635,25 +1635,13 @@ ims_pcu_get_cdc_union_desc(struct usb_interface *intf)
 		return NULL;
 	}
 
-	while (buflen >= sizeof(*union_desc)) {
+	while (buflen > 0) {
 		union_desc = (struct usb_cdc_union_desc *)buf;
-
-		if (union_desc->bLength > buflen) {
-			dev_err(&intf->dev, "Too large descriptor\n");
-			return NULL;
-		}
 
 		if (union_desc->bDescriptorType == USB_DT_CS_INTERFACE &&
 		    union_desc->bDescriptorSubType == USB_CDC_UNION_TYPE) {
 			dev_dbg(&intf->dev, "Found union header\n");
-
-			if (union_desc->bLength >= sizeof(*union_desc))
-				return union_desc;
-
-			dev_err(&intf->dev,
-				"Union descriptor to short (%d vs %zd\n)",
-				union_desc->bLength, sizeof(*union_desc));
-			return NULL;
+			return union_desc;
 		}
 
 		buflen -= union_desc->bLength;
@@ -1871,7 +1859,7 @@ static int ims_pcu_identify_type(struct ims_pcu *pcu, u8 *device_id)
 
 static int ims_pcu_init_application_mode(struct ims_pcu *pcu)
 {
-	static atomic_t device_no = ATOMIC_INIT(-1);
+	static atomic_unchecked_t device_no = ATOMIC_INIT(-1);
 
 	const struct ims_pcu_device_info *info;
 	int error;
@@ -1902,7 +1890,7 @@ static int ims_pcu_init_application_mode(struct ims_pcu *pcu)
 	}
 
 	/* Device appears to be operable, complete initialization */
-	pcu->device_no = atomic_inc_return(&device_no);
+	pcu->device_no = atomic_inc_return_unchecked(&device_no);
 
 	/*
 	 * PCU-B devices, both GEN_1 and GEN_2 do not have OFN sensor

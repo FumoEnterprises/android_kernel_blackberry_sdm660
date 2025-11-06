@@ -525,16 +525,6 @@ config KEYBOARD_GOLDFISH_EVENTS
 	  To compile this driver as a module, choose M here: the
 	  module will be called goldfish-events.
 
-config KEYBOARD_GOLDFISH_ROTARY
-	depends on GOLDFISH
-	tristate "Rotary encoder device for Goldfish"
-	help
-	  Say Y here to get an input event device for the Goldfish virtual
-	  device emulator that acts as a rotary encoder.
-
-	  To compile this driver as a module, choose M here: the
-	  module will be called goldfish-rotary.
-
 config KEYBOARD_STOWAWAY
 	tristate "Stowaway keyboard"
 	select SERIO
@@ -728,5 +718,26 @@ config KEYBOARD_BCM
 
 	  To compile this driver as a module, choose M here: the
 	  module will be called bcm-keypad.
+
+#start: BBRY_ANDROID
+config KEYBOARD_STMPE_BBRY
+	tristate "STMPE BBRY keypad support"
+	select INPUT_MATRIXKMAP
+		help
+		Say Y here if you want to use the keypad controller on STMPE BBRY I/O
+		expanders.
+
+		To compile this driver as a module, choose M here: the module will be
+		called stmpe-keypad-bbry.
+
+config STMPE_KEYPAD_DDT
+	tristate "STMPE Keypad DDT module"
+	depends on KEYBOARD_STMPE_BBRY
+	help
+	  Say Y here to enable support for Keypad DDT report.
+
+	  If unsure, say N.
+
+#end: BBRY_ANDROID
 
 endif

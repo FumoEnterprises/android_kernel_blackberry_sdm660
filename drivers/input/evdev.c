@@ -342,6 +342,20 @@ static int evdev_fasync(int fd, struct file *file, int on)
 	return fasync_helper(fd, file, on, &client->fasync);
 }
 
+static int evdev_flush(struct file *file, fl_owner_t id)
+{
+	struct evdev_client *client = file->private_data;
+	struct evdev *evdev = client->evdev;
+
+	mutex_lock(&evdev->mutex);
+
+	if (evdev->exist && !client->revoked)
+		input_flush_device(&evdev->handle, file);
+
+	mutex_unlock(&evdev->mutex);
+	return 0;
+}
+
 static void evdev_free(struct device *dev)
 {
 	struct evdev *evdev = container_of(dev, struct evdev, dev);
@@ -455,10 +469,6 @@ static int evdev_release(struct inode *inode, struct file *file)
 	unsigned int i;
 
 	mutex_lock(&evdev->mutex);
-
-	if (evdev->exist && !client->revoked)
-		input_flush_device(&evdev->handle, file);
-
 	evdev_ungrab(evdev, client);
 	mutex_unlock(&evdev->mutex);
 
@@ -987,7 +997,7 @@ static int evdev_set_mask(struct evdev_client *client,
 	if (!cnt)
 		return 0;
 
-	mask = kcalloc(sizeof(unsigned long), BITS_TO_LONGS(cnt), GFP_KERNEL);
+	mask = kcalloc(BITS_TO_LONGS(cnt), sizeof(unsigned long), GFP_KERNEL);
 	if (!mask)
 		return -ENOMEM;
 
@@ -1321,6 +1331,7 @@ static const struct file_operations evdev_fops = {
 	.compat_ioctl	= evdev_ioctl_compat,
 #endif
 	.fasync		= evdev_fasync,
+	.flush		= evdev_flush,
 	.llseek		= no_llseek,
 };
 

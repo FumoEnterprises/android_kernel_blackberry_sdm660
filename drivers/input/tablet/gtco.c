@@ -78,7 +78,6 @@ Scott Hill shill@gtcocalcomp.com
 
 /* Max size of a single report */
 #define REPORT_MAX_SIZE       10
-#define MAX_COLLECTION_LEVELS  10
 
 
 /* Bitmask whether pen is in range */
@@ -225,12 +224,14 @@ static void parse_hid_report_descriptor(struct gtco *device, char * report,
 	char  maintype = 'x';
 	char  globtype[12];
 	int   indent = 0;
-	char  indentstr[MAX_COLLECTION_LEVELS + 1] = { 0 };
+	char  indentstr[10] = "";
+
 
 	dev_dbg(ddev, "======>>>>>>PARSE<<<<<<======\n");
 
 	/* Walk  this report and pull out the info we need */
 	while (i < length) {
+		/* MODIFIED-BEGIN by hongwei.tian, 2018-04-08,BUG-6168118*/
 		prefix = report[i++];
 
 		/* Determine data size and save the data in the proper variable */
@@ -241,7 +242,7 @@ static void parse_hid_report_descriptor(struct gtco *device, char * report,
 				i + size, length);
 			break;
 		}
-
+		/* MODIFIED-END by hongwei.tian,BUG-6168118*/
 		switch (size) {
 		case 1:
 			data = report[i];
@@ -249,7 +250,7 @@ static void parse_hid_report_descriptor(struct gtco *device, char * report,
 		case 2:
 			data16 = get_unaligned_le16(&report[i]);
 			break;
-		case 4:
+		case 4: // MODIFIED by hongwei.tian, 2018-04-08,BUG-6168118
 			data32 = get_unaligned_le32(&report[i]);
 			break;
 		}
@@ -351,13 +352,6 @@ static void parse_hid_report_descriptor(struct gtco *device, char * report,
 			case TAG_MAIN_COL_START:
 				maintype = 'S';
 
-				if (indent == MAX_COLLECTION_LEVELS) {
-					dev_err(ddev, "Collection level %d would exceed limit of %d\n",
-						indent + 1,
-						MAX_COLLECTION_LEVELS);
-					break;
-				}
-
 				if (data == 0) {
 					dev_dbg(ddev, "======>>>>>> Physical\n");
 					strcpy(globtype, "Physical");
@@ -377,15 +371,8 @@ static void parse_hid_report_descriptor(struct gtco *device, char * report,
 				break;
 
 			case TAG_MAIN_COL_END:
-				maintype = 'E';
-
-				if (indent == 0) {
-					dev_err(ddev, "Collection level already at zero\n");
-					break;
-				}
-
 				dev_dbg(ddev, "<<<<<<======\n");
-
+				maintype = 'E';
 				indent--;
 				for (x = 0; x < indent; x++)
 					indentstr[x] = '-';
@@ -876,14 +863,18 @@ static int gtco_probe(struct usb_interface *usbinterface,
 	}
 
 	/* Sanity check that a device has an endpoint */
-	if (usbinterface->cur_altsetting->desc.bNumEndpoints < 1) {
+	if (usbinterface->altsetting[0].desc.bNumEndpoints < 1) {
 		dev_err(&usbinterface->dev,
 			"Invalid number of endpoints\n");
 		error = -EINVAL;
 		goto err_free_urb;
 	}
 
-	endpoint = &usbinterface->cur_altsetting->endpoint[0].desc;
+	/*
+	 * The endpoint is always altsetting 0, we know this since we know
+	 * this device only has one interrupt endpoint
+	 */
+	endpoint = &usbinterface->altsetting[0].endpoint[0].desc;
 
 	/* Some debug */
 	dev_dbg(&usbinterface->dev, "gtco # interfaces: %d\n", usbinterface->num_altsetting);
@@ -970,7 +961,7 @@ static int gtco_probe(struct usb_interface *usbinterface,
 	input_dev->dev.parent = &usbinterface->dev;
 
 	/* Setup the URB, it will be posted later on open of input device */
-	endpoint = &usbinterface->cur_altsetting->endpoint[0].desc;
+	endpoint = &usbinterface->altsetting[0].endpoint[0].desc;
 
 	usb_fill_int_urb(gtco->urbinfo,
 			 gtco->usbdev,

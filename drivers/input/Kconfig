@@ -200,6 +200,18 @@ config INPUT_KEYCOMBO
 	---help---
 	  Say Y here if you want to take action when some keys are pressed;
 
+config GOODIX_FINGERPRINT_GF5216
+	tristate "Goodix Fingerprint"
+	default y
+	---help---
+	Goodix Fingerprint chip GF316M/GF318M/GF3118M/GF518M/GF5118M/GF516M/GF816M/GF3208/GF3206/GF3266/GF3288/GF5206/GF5216/GF5208 TEE driver.
+
+config CKB_MASK_KEY
+	tristate "NAV KEY OPTIMIZE"
+	---help---
+	Optimize nav key mis-operation with CKB&Keypad
+	
+
 comment "Input Device Drivers"
 
 source "drivers/input/keyboard/Kconfig"
@@ -214,9 +226,7 @@ source "drivers/input/touchscreen/Kconfig"
 
 source "drivers/input/misc/Kconfig"
 
-source "drivers/input/sensors/bmi160/Kconfig"
-
-source "drivers/input/fingerprint/Kconfig"
+source "drivers/input/goodixfp3206/Kconfig"
 
 endif
 

@@ -1,21 +1,30 @@
+/* Copyright (C) 2018 Tcl Corporation Limited */
 /*
  * driver definition for sensor driver
+ * Copyright (C) 2016 Goodix
  *
- * Coypright (c) 2017 Goodix
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+ *
  */
 #ifndef __GF_SPI_H
 #define __GF_SPI_H
 
 #include <linux/types.h>
 #include <linux/notifier.h>
-#include <linux/regulator/consumer.h>	//add by Win for regulator
-/*add BBS log*/
-#define BBOX_FP_PROB_FAIL do {printk("BBox::UEC;39::0\n");} while (0);
-#define BBOX_FP_RESET_FAIL do {printk("BBox::UEC;39::1\n");} while (0);
-#define BBOX_FP_RESET_CHIP_FAIL do {printk("BBox::UEC;39::2\n");} while (0);
-
 /**********************************************************/
-enum FP_MODE{
+enum FP_MODE {
 	GF_IMAGE_MODE = 0,
 	GF_KEY_MODE,
 	GF_SLEEP_MODE,
@@ -36,13 +45,11 @@ enum FP_MODE{
 #define GF_NAV_INPUT_HEAVY		KEY_CHAT
 #endif
 
-#define GF_KEY_INPUT_HOME		KEY_HOME
+#define GF_KEY_INPUT_HOME		551 // MODIFIED by siguo.cheng, 2018-04-28,BUG-6141872
 #define GF_KEY_INPUT_MENU		KEY_MENU
 #define GF_KEY_INPUT_BACK		KEY_BACK
 #define GF_KEY_INPUT_POWER		KEY_POWER
 #define GF_KEY_INPUT_CAMERA		KEY_CAMERA
-#define GF_KEY_INPUT_WAKEUP		KEY_WAKEUP
-#define GF_KEY_INPUT_HOMEPAGE	KEY_HOMEPAGE
 
 #if defined(SUPPORT_NAV_EVENT)
 typedef enum gf_nav_event {
@@ -86,7 +93,7 @@ struct gf_ioc_chip_info {
 	unsigned char reserved[5];
 };
 
-#define GF_IOC_MAGIC    'g'     //define magic number
+#define GF_IOC_MAGIC    'g'
 #define GF_IOC_INIT             _IOR(GF_IOC_MAGIC, 0, uint8_t)
 #define GF_IOC_EXIT             _IO(GF_IOC_MAGIC, 1)
 #define GF_IOC_RESET            _IO(GF_IOC_MAGIC, 2)
@@ -109,10 +116,10 @@ struct gf_ioc_chip_info {
 #define  GF_IOC_MAXNR    14  /* THIS MACRO IS NOT USED NOW... */
 #endif
 
-//#define AP_CONTROL_CLK       1
+/*#define AP_CONTROL_CLK       1*/
 #define  USE_PLATFORM_BUS     1
-//#define  USE_SPI_BUS	1
-//#define GF_FASYNC   1	/*If support fasync mechanism.*/
+/*#define  USE_SPI_BUS	1*/
+/* #define GF_FASYNC    1*/	/*If support fasync mechanism.*/
 #define GF_NETLINK_ENABLE 1
 #define GF_NET_EVENT_IRQ 1
 #define GF_NET_EVENT_FB_BLACK 2
@@ -145,11 +152,9 @@ struct gf_dev {
 	struct notifier_block notifier;
 	char device_available;
 	char fb_black;
-	int key_customer_define; //Add for key define by customer
-	struct regulator        *pwr_reg;	//add by Win for regulator
 };
 
-int gf_parse_dts(struct gf_dev* gf_dev);
+int gf_parse_dts(struct gf_dev *gf_dev);
 void gf_cleanup(struct gf_dev *gf_dev);
 
 int gf_power_on(struct gf_dev *gf_dev);
@@ -158,7 +163,7 @@ int gf_power_off(struct gf_dev *gf_dev);
 int gf_hw_reset(struct gf_dev *gf_dev, unsigned int delay_ms);
 int gf_irq_num(struct gf_dev *gf_dev);
 
-void sendnlmsg(char *msg);
+int sendnlmsg(char *msg);
 int netlink_init(void);
 void netlink_exit(void);
 #endif /*__GF_SPI_H*/
