@@ -21,7 +21,7 @@
 
 #include "dt_idle_states.h"
 
-static int init_state_node(struct cpuidle_state *idle_state,
+static int init_state_node(cpuidle_state_no_const *idle_state,
 			   const struct of_device_id *matches,
 			   struct device_node *state_node)
 {
@@ -174,10 +174,8 @@ int dt_init_idle_driver(struct cpuidle_driver *drv,
 		if (!state_node)
 			break;
 
-		if (!of_device_is_available(state_node)) {
-			of_node_put(state_node);
+		if (!of_device_is_available(state_node))
 			continue;
-		}
 
 		if (!idle_state_valid(state_node, i, cpumask)) {
 			pr_warn("%s idle state not valid, bailing out\n",
