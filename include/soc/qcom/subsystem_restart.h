@@ -137,6 +137,9 @@ extern void subsys_set_error(struct subsys_device *dev, const char *error_msg);
 void notify_proxy_vote(struct device *device);
 void notify_proxy_unvote(struct device *device);
 void complete_err_ready(struct subsys_device *subsys);
+#ifdef CONFIG_BBRY
+extern void subsystem_ramdump_indication(struct subsys_device *dev, unsigned int indication);
+#endif
 extern int wait_for_shutdown_ack(struct subsys_desc *desc);
 #else
 

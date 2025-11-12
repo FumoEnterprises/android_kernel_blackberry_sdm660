@@ -20,15 +20,10 @@
 #include "sdm660-internal.h"
 #include "sdm660-external.h"
 #include "../codecs/sdm660_cdc/msm-analog-cdc.h"
-#include <linux/proc_fs.h>
-
-#undef USE_QC_SPK_AMP
-#ifdef USE_QC_SPK_AMP
 #include "../codecs/wsa881x.h"
-#endif
+#include <linux/regulator/consumer.h> // MODIFIED by hongwei.tian, 2017-08-29,BUG-5232247
+#include <linux/delay.h>
 
-#define __CHIPSET__ "SDM660 "
-#define MSM_DAILINK_NAME(name) (__CHIPSET__#name)
 #define DRV_NAME "sdm660-asoc-snd"
 
 #define MSM_INT_DIGITAL_CODEC "msm-dig-codec"
@@ -36,9 +31,12 @@
 
 #define DEV_NAME_STR_LEN  32
 #define DEFAULT_MCLK_RATE 9600000
-#define MSM_LL_QOS_VALUE 300 /* time in us to ensure LPM doesn't go in C3/C4 */
-
-bool ext_spk_amp_support;
+/* MODIFIED-BEGIN by hongwei.tian, 2017-12-06,BUG-5709367*/
+#ifdef CONFIG_SND_SOC_TFA98XX_MMI_TEST
+static atomic_t mmi_calib_state;
+static int mi2s_index = -1;
+#endif
+/* MODIFIED-END by hongwei.tian,BUG-5709367*/
 
 struct dev_config {
 	u32 sample_rate;
@@ -143,7 +141,6 @@ static struct dev_config tdm_tx_cfg[TDM_INTERFACE_MAX][TDM_PORT_MAX] = {
 static struct dev_config ext_disp_rx_cfg[] = {
 	[DP_RX_IDX] =   {SAMPLING_RATE_48KHZ, SNDRV_PCM_FORMAT_S16_LE, 2},
 };
-
 static struct dev_config usb_rx_cfg = {
 	.sample_rate = SAMPLING_RATE_48KHZ,
 	.bit_format = SNDRV_PCM_FORMAT_S16_LE,
@@ -194,33 +191,31 @@ static u32 mi2s_ebit_clk[MI2S_MAX] = {
 	Q6AFE_LPASS_CLK_ID_QUAD_MI2S_EBIT
 };
 
-#ifdef USE_QC_SPK_AMP
 struct msm_wsa881x_dev_info {
 	struct device_node *of_node;
 	u32 index;
 };
 static struct snd_soc_aux_dev *msm_aux_dev;
 static struct snd_soc_codec_conf *msm_codec_conf;
-#endif
 
 static bool msm_swap_gnd_mic(struct snd_soc_codec *codec);
 
 static struct wcd_mbhc_config mbhc_cfg = {
 	.read_fw_bin = false,
 	.calibration = NULL,
-	.detect_extn_cable = false,
+	.detect_extn_cable = true,
 	.mono_stero_detection = false,
 	.swap_gnd_mic = NULL,
 	.hs_ext_micbias = true,
 	.key_code[0] = KEY_MEDIA,
-	.key_code[1] = KEY_VOLUMEUP,
-	.key_code[2] = KEY_VOLUMEDOWN,
-	.key_code[3] = 0,
+	.key_code[1] = KEY_VOICECOMMAND,
+	.key_code[2] = KEY_VOLUMEUP,
+	.key_code[3] = KEY_VOLUMEDOWN,
 	.key_code[4] = 0,
 	.key_code[5] = 0,
 	.key_code[6] = 0,
 	.key_code[7] = 0,
-	.linein_th = 27000,
+	.linein_th = 5000,
 	.moisture_en = false,
 	.mbhc_micbias = 0,
 	.anc_micbias = 0,
@@ -237,7 +232,7 @@ static struct dev_config proxy_rx_cfg = {
 static struct dev_config mi2s_rx_cfg[] = {
 	[PRIM_MI2S] = {SAMPLING_RATE_48KHZ, SNDRV_PCM_FORMAT_S16_LE, 2},
 	[SEC_MI2S]  = {SAMPLING_RATE_48KHZ, SNDRV_PCM_FORMAT_S16_LE, 2},
-	[TERT_MI2S] = {SAMPLING_RATE_48KHZ, SNDRV_PCM_FORMAT_S16_LE, 1},
+	[TERT_MI2S] = {SAMPLING_RATE_48KHZ, SNDRV_PCM_FORMAT_S16_LE, 2},
 	[QUAT_MI2S] = {SAMPLING_RATE_48KHZ, SNDRV_PCM_FORMAT_S16_LE, 2},
 };
 
@@ -291,7 +286,6 @@ static char const *usb_sample_rate_text[] = {"KHZ_8", "KHZ_11P025",
 static char const *ext_disp_bit_format_text[] = {"S16_LE", "S24_LE"};
 static char const *ext_disp_sample_rate_text[] = {"KHZ_48", "KHZ_96",
 						  "KHZ_192"};
-static const char *const qos_text[] = {"Disable", "Enable"};
 
 static SOC_ENUM_SINGLE_EXT_DECL(ext_disp_rx_chs, ch_text);
 static SOC_ENUM_SINGLE_EXT_DECL(proxy_rx_chs, ch_text);
@@ -342,9 +336,6 @@ static SOC_ENUM_SINGLE_EXT_DECL(tdm_tx_sample_rate, tdm_sample_rate_text);
 static SOC_ENUM_SINGLE_EXT_DECL(tdm_rx_chs, tdm_ch_text);
 static SOC_ENUM_SINGLE_EXT_DECL(tdm_rx_format, tdm_bit_format_text);
 static SOC_ENUM_SINGLE_EXT_DECL(tdm_rx_sample_rate, tdm_sample_rate_text);
-static SOC_ENUM_SINGLE_EXT_DECL(qos_vote, qos_text);
-
-static int qos_vote_status;
 
 static struct afe_clk_set mi2s_clk[MI2S_MAX] = {
 	{
@@ -417,7 +408,9 @@ static struct afe_clk_set mi2s_mclk[MI2S_MAX] = {
 };
 
 static struct mi2s_conf mi2s_intf_conf[MI2S_MAX];
-
+#ifdef CONFIG_TCT_SDM660_COMMON
+static bool msm_swap_gnd_mic_reset(struct snd_soc_codec *codec); // MODIFIED by hongwei.tian, 2017-12-13,BUG-5760547
+#endif
 static int proxy_rx_ch_get(struct snd_kcontrol *kcontrol,
 			       struct snd_ctl_elem_value *ucontrol)
 {
@@ -1833,55 +1826,6 @@ static int ext_disp_rx_sample_rate_put(struct snd_kcontrol *kcontrol,
 	return 0;
 }
 
-static int msm_qos_ctl_get(struct snd_kcontrol *kcontrol,
-				struct snd_ctl_elem_value *ucontrol)
-{
-	ucontrol->value.enumerated.item[0] = qos_vote_status;
-	return 0;
-}
-
-static int msm_qos_ctl_put(struct snd_kcontrol *kcontrol,
-				struct snd_ctl_elem_value *ucontrol)
-{
-	struct snd_soc_codec *codec = snd_soc_kcontrol_codec(kcontrol);
-	struct snd_soc_card *card = codec->component.card;
-	const char *fe_name = MSM_DAILINK_NAME(LowLatency);
-	struct snd_soc_pcm_runtime *rtd;
-	struct snd_pcm_substream *substream;
-	s32 usecs;
-
-	rtd = snd_soc_get_pcm_runtime(card, fe_name);
-	if (!rtd) {
-		pr_err("%s: fail to get pcm runtime for %s\n",
-			__func__, fe_name);
-		return -EINVAL;
-	}
-
-	substream = rtd->pcm->streams[SNDRV_PCM_STREAM_PLAYBACK].substream;
-	if (!substream) {
-		pr_err("%s: substream is null\n", __func__);
-		return -EINVAL;
-	}
-
-	qos_vote_status = ucontrol->value.enumerated.item[0];
-	if (qos_vote_status) {
-		if (pm_qos_request_active(&substream->latency_pm_qos_req))
-			pm_qos_remove_request(&substream->latency_pm_qos_req);
-		if (!substream->runtime) {
-			pr_err("%s: runtime is null\n", __func__);
-			return -EINVAL;
-		}
-		usecs = MSM_LL_QOS_VALUE;
-		if (usecs >= 0)
-			pm_qos_add_request(&substream->latency_pm_qos_req,
-						PM_QOS_CPU_DMA_LATENCY, usecs);
-	} else {
-		if (pm_qos_request_active(&substream->latency_pm_qos_req))
-			pm_qos_remove_request(&substream->latency_pm_qos_req);
-	}
-	return 0;
-}
-
 const struct snd_kcontrol_new msm_common_snd_controls[] = {
 	SOC_ENUM_EXT("PROXY_RX Channels", proxy_rx_chs,
 			proxy_rx_ch_get, proxy_rx_ch_put),
@@ -2066,10 +2010,6 @@ const struct snd_kcontrol_new msm_common_snd_controls[] = {
 	SOC_ENUM_EXT("QUAT_TDM_TX_0 Channels", tdm_tx_chs,
 			tdm_tx_ch_get,
 			tdm_tx_ch_put),
-
-	SOC_ENUM_EXT("MultiMedia5_RX QOS Vote", qos_vote, msm_qos_ctl_get,
-			msm_qos_ctl_put),
-
 };
 
 /**
@@ -2519,6 +2459,120 @@ done:
 	return ret;
 }
 
+
+/* MODIFIED-BEGIN by hongwei.tian, 2017-12-06,BUG-5709367*/
+#ifdef CONFIG_SND_SOC_TFA98XX_MMI_TEST
+static unsigned int  tfa_mi2s_portid = 0;
+static struct afe_clk_set mi2s_rx_clk_only = {
+	AFE_API_VERSION_I2S_CONFIG,
+	Q6AFE_LPASS_CLK_ID_QUAD_MI2S_IBIT,
+	Q6AFE_LPASS_IBIT_CLK_1_P536_MHZ,
+	Q6AFE_LPASS_CLK_ATTRIBUTE_COUPLE_NO,
+	Q6AFE_LPASS_CLK_ROOT_DEFAULT,
+	0,
+};
+extern u16 tfa_get_mi2s_interface(void);
+static int msm_q6_enable_mi2s_clocks(bool enable)
+{
+	union afe_port_config port_config;
+	int rc = 0;
+	printk(KERN_ERR"set msm_q6_enable_mi2s_clocks %d\n", enable);
+	if(enable) {
+		port_config.i2s.channel_mode = AFE_PORT_I2S_SD0;
+		port_config.i2s.mono_stereo = MSM_AFE_CH_STEREO;
+		port_config.i2s.data_format= 0;
+		port_config.i2s.bit_width = 16;
+		port_config.i2s.reserved = 0;
+		port_config.i2s.i2s_cfg_minor_version = AFE_API_VERSION_I2S_CONFIG;
+		port_config.i2s.sample_rate = 48000;
+		port_config.i2s.ws_src = 1;
+		rc = afe_port_start(tfa_mi2s_portid, &port_config,
+		48000);
+		if (IS_ERR_VALUE(rc)) {
+			printk(KERN_ERR"fail to open AFE port\n");
+			return -EINVAL;
+		}
+	} else {
+		rc = afe_close(tfa_mi2s_portid);
+		if (IS_ERR_VALUE(rc)) {
+			printk(KERN_ERR"fail to close AFE port\n");
+			return -EINVAL;
+		}
+	}
+	return rc;
+}
+
+int mi2s_sclk_only_enable(int enable)
+{
+	int ret = 0;
+	static atomic_t sclk_en;
+	int active_state;
+
+	active_state = atomic_read(&sclk_en);
+	if (active_state && 0 == enable) {
+		atomic_set(&sclk_en, 0);
+	} else if (!active_state && enable) {
+		atomic_set(&sclk_en, 1);
+	} else {
+		if (active_state && enable) {
+	            pr_err("%s %d wrong sclk use case :sclk is opened , why open again!!\n", __func__, __LINE__);
+		  } else if (!active_state && !enable){
+	            pr_err("%s %d wrong sclk use case :sclk isn't open, why stop!!\n", __func__, __LINE__);
+		  }
+	        dump_stack();
+	        return -1;
+	}
+	atomic_set(&mmi_calib_state, enable);
+
+	switch(tfa_get_mi2s_interface()){
+		case 1:
+			tfa_mi2s_portid = AFE_PORT_ID_PRIMARY_MI2S_RX;
+			mi2s_rx_clk_only.clk_id = Q6AFE_LPASS_CLK_ID_PRI_MI2S_IBIT;
+			mi2s_index = PRIM_MI2S;
+			break;
+		case 2:
+			tfa_mi2s_portid = AFE_PORT_ID_SECONDARY_MI2S_RX;
+			mi2s_rx_clk_only.clk_id = Q6AFE_LPASS_CLK_ID_SEC_MI2S_IBIT;
+			mi2s_index = SEC_MI2S;
+			break;
+		case 3:
+			tfa_mi2s_portid = AFE_PORT_ID_TERTIARY_MI2S_RX;
+			mi2s_rx_clk_only.clk_id = Q6AFE_LPASS_CLK_ID_TER_MI2S_IBIT;
+			mi2s_index = TERT_MI2S;
+			break;
+		case 4:
+			tfa_mi2s_portid = AFE_PORT_ID_QUATERNARY_MI2S_RX;
+			mi2s_rx_clk_only.clk_id = Q6AFE_LPASS_CLK_ID_QUAD_MI2S_IBIT;
+			mi2s_index = QUAT_MI2S;
+			break;
+		default :
+			pr_err("%s: set set port start failed, err:%d\n", __func__, ret);
+			break;
+		}
+
+	if(enable) {
+		mi2s_rx_clk_only.enable = 1;
+	}
+	else{
+		mi2s_rx_clk_only.enable = 0;
+	}
+	ret = afe_set_lpass_clock_v2(tfa_mi2s_portid,
+				&mi2s_rx_clk_only);
+	if (ret < 0) {
+		pr_err("%s: afe lpass clock failed, err:%d\n", __func__, ret);
+		goto err;
+	}
+	msm_q6_enable_mi2s_clocks(enable);
+	if (ret < 0)
+		pr_err("%s: set set port start failed, err:%d\n", __func__, ret);
+err:
+	return ret;
+
+}
+EXPORT_SYMBOL_GPL(mi2s_sclk_only_enable);
+#endif
+/* MODIFIED-END by hongwei.tian,BUG-5709367*/
+
 /**
  * msm_mi2s_snd_startup - startup ops of mi2s.
  *
@@ -2534,12 +2588,24 @@ int msm_mi2s_snd_startup(struct snd_pcm_substream *substream)
 	int port_id = msm_get_port_id(rtd->dai_link->be_id);
 	int index = cpu_dai->id;
 	unsigned int fmt = SND_SOC_DAIFMT_CBS_CFS;
-	struct msm_asoc_mach_data *pdata = snd_soc_card_get_drvdata(rtd->card);
+	/* MODIFIED-BEGIN by hongwei.tian, 2018-02-27,BUG-6028897*/
+	struct msm_asoc_mach_data *pdata =
+				snd_soc_card_get_drvdata(rtd->card);
+				/* MODIFIED-END by hongwei.tian,BUG-6028897*/
 
 	dev_dbg(rtd->card->dev,
 		"%s: substream = %s  stream = %d, dai name %s, dai ID %d\n",
 		__func__, substream->name, substream->stream,
 		cpu_dai->name, cpu_dai->id);
+
+/* MODIFIED-BEGIN by hongwei.tian, 2017-12-06,BUG-5709367*/
+#ifdef CONFIG_SND_SOC_TFA98XX_MMI_TEST
+	if (atomic_read(&mmi_calib_state) && index == mi2s_index) {
+		pr_err("%s MMI calibration is processing, stop I2S clk operation, return!\n", __func__);
+		return ret;
+	}
+#endif
+/* MODIFIED-END by hongwei.tian,BUG-5709367*/
 
 	if (index < PRIM_MI2S || index > QUAT_MI2S) {
 		ret = -EINVAL;
@@ -2586,10 +2652,10 @@ int msm_mi2s_snd_startup(struct snd_pcm_substream *substream)
 				goto clk_off;
 			}
 		}
-		if ((index == TERT_MI2S) && (pdata->tert_mi2s_gpio_p)) {
+		/* MODIFIED-BEGIN by hongwei.tian, 2018-02-27,BUG-6028897*/
+		if (index == TERT_MI2S)
 			msm_cdc_pinctrl_select_active_state(pdata->tert_mi2s_gpio_p);
-			pr_debug("%s: active Tertiary MI2S gpios\n", __func__);
-		}
+			/* MODIFIED-END by hongwei.tian,BUG-6028897*/
 	}
 	mutex_unlock(&mi2s_intf_conf[index].lock);
 	return 0;
@@ -2616,10 +2682,22 @@ void msm_mi2s_snd_shutdown(struct snd_pcm_substream *substream)
 	struct snd_soc_pcm_runtime *rtd = substream->private_data;
 	int port_id = msm_get_port_id(rtd->dai_link->be_id);
 	int index = rtd->cpu_dai->id;
-	struct msm_asoc_mach_data *pdata = snd_soc_card_get_drvdata(rtd->card);
+	/* MODIFIED-BEGIN by hongwei.tian, 2018-02-27,BUG-6028897*/
+	struct msm_asoc_mach_data *pdata =
+				snd_soc_card_get_drvdata(rtd->card);
+				/* MODIFIED-END by hongwei.tian,BUG-6028897*/
 
 	pr_debug("%s(): substream = %s  stream = %d\n", __func__,
 		 substream->name, substream->stream);
+
+/* MODIFIED-BEGIN by hongwei.tian, 2017-12-06,BUG-5709367*/
+#ifdef CONFIG_SND_SOC_TFA98XX_MMI_TEST
+	if (atomic_read(&mmi_calib_state) && index == mi2s_index) {
+		pr_err("%s MMI calibration is processing, stop I2S clk operation, return!\n", __func__);
+		return;
+	}
+#endif
+/* MODIFIED-END by hongwei.tian,BUG-5709367*/
 	if (index < PRIM_MI2S || index > QUAT_MI2S) {
 		pr_err("%s:invalid MI2S DAI(%d)\n", __func__, index);
 		return;
@@ -2627,10 +2705,10 @@ void msm_mi2s_snd_shutdown(struct snd_pcm_substream *substream)
 
 	mutex_lock(&mi2s_intf_conf[index].lock);
 	if (--mi2s_intf_conf[index].ref_cnt == 0) {
-		if ((index == TERT_MI2S) && (pdata->tert_mi2s_gpio_p)) {
+		/* MODIFIED-BEGIN by hongwei.tian, 2018-02-27,BUG-6028897*/
+		if (index == TERT_MI2S)
 			msm_cdc_pinctrl_select_sleep_state(pdata->tert_mi2s_gpio_p);
-			pr_debug("%s: sleep Tertiary MI2S gpios\n", __func__);
-		}
+			/* MODIFIED-END by hongwei.tian,BUG-6028897*/
 		ret = msm_mi2s_set_sclk(substream, false);
 		if (ret < 0)
 			pr_err("%s:clock disable failed for MI2S (%d); ret=%d\n",
@@ -2650,40 +2728,6 @@ void msm_mi2s_snd_shutdown(struct snd_pcm_substream *substream)
 	mutex_unlock(&mi2s_intf_conf[index].lock);
 }
 EXPORT_SYMBOL(msm_mi2s_snd_shutdown);
-
-static int fih_ext_spk_amp_read_show(struct seq_file *m, void *v)
-{
-	if(ext_spk_amp_support)
-		seq_printf(m, "Support\n");
-	else
-		seq_printf(m, "Not Support\n");
-	return 0;
-}
-
-static int fih_ext_spk_amp_proc_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, fih_ext_spk_amp_read_show, NULL);
-}
-
-static struct file_operations ext_spk_amp_file_ops = {
-	.owner   = THIS_MODULE,
-	.open    = fih_ext_spk_amp_proc_open,
-	.read    = seq_read,
-	.llseek  = seq_lseek,
-	.release = single_release
-};
-
-static int fih_ext_spk_amp_init(void)
-{
-	if (proc_create("AllHWList/ExtSpkAmp", 0, NULL, &ext_spk_amp_file_ops) == NULL) {
-		proc_mkdir("AllHWList", NULL);
-		if (proc_create("AllHWList/ExtSpkAmp", 0, NULL, &ext_spk_amp_file_ops) == NULL) {
-			pr_err("%s: fail to create proc/%s\n", __func__, "AllHWList/ExtSpkAmp");
-			return 1;
-		}
-	}
-	return 0;
-}
 
 /* Validate whether US EU switch is present or not */
 static int msm_prepare_us_euro(struct snd_soc_card *card)
@@ -2729,6 +2773,81 @@ static bool msm_swap_gnd_mic(struct snd_soc_codec *codec)
 	return true;
 }
 
+/* MODIFIED-BEGIN by hongwei.tian, 2017-12-13,BUG-5760547*/
+#ifdef CONFIG_TCT_SDM660_COMMON
+static bool msm_swap_gnd_mic_reset(struct snd_soc_codec *codec)
+{
+	struct snd_soc_card *card = codec->component.card;
+	struct msm_asoc_mach_data *pdata = snd_soc_card_get_drvdata(card);
+	int value;
+
+	pr_debug("%s: reset gpios for US_EU\n", __func__);
+
+	if (pdata->us_euro_gpio_p) {
+		value = msm_cdc_pinctrl_get_state(pdata->us_euro_gpio_p);
+		pr_debug("%s: swap us_euro_gpio_p : %d\n", __func__, value);
+		msm_cdc_pinctrl_select_sleep_state(pdata->us_euro_gpio_p);
+
+	} else if (pdata->us_euro_gpio >= 0) {
+		value = gpio_get_value_cansleep(pdata->us_euro_gpio);
+		pr_debug("%s: swap us_euro_gpio : %d\n", __func__, value);
+		gpio_set_value_cansleep(pdata->us_euro_gpio, 0);
+	}
+	return true;
+}
+
+/* MODIFIED-BEGIN by hongwei.tian, 2017-12-21,BUG-5780230*/
+/*
+reset hph switch for akm to internal codec
+*/
+extern int g_hph_src_state;
+static bool msm_swap_hph_switch_reset(struct snd_soc_codec *codec,bool status)
+{
+	int ret = 0;
+	struct snd_soc_card *card = codec->component.card;
+	struct msm_asoc_mach_data *pdata = snd_soc_card_get_drvdata(card);
+
+	/* MODIFIED-BEGIN by hongwei.tian, 2018-01-10,BUG-5867922*/
+	printk(KERN_ERR"msm_swap_hph_switch_status reset: curr = %d  \n", g_hph_src_state);
+	printk(KERN_ERR"msm_swap_hph_switch_status reset: status = %d  \n", status);
+	/* MODIFIED-END by hongwei.tian,BUG-5867922*/
+	if(!status && g_hph_src_state == 1 )
+	{
+		ret = msm_cdc_pinctrl_select_sleep_state(
+					pdata->hph_switch_gpio_p);
+		if (ret) {
+			pr_err("%s: gpio set cannot be de-activated %s\n",
+					__func__, "hph_switch");
+		}
+	}
+	else if(status)
+	{
+		ret = msm_cdc_pinctrl_select_active_state(
+						pdata->hph_switch_gpio_p);
+		if (ret) {
+			pr_err("%s: gpio set cannot be activated %s\n",
+					__func__, "hph_switch");
+		}
+	}
+	return ret;
+}
+/* MODIFIED-END by hongwei.tian,BUG-5780230*/
+
+/* MODIFIED-BEGIN by hongwei.tian, 2018-01-10,BUG-5867922*/
+void msm_swap_hph_switch_status(struct snd_soc_codec *codec)
+{
+	int gpio_status;
+	struct snd_soc_card *card = codec->component.card;
+	struct msm_asoc_mach_data *pdata = snd_soc_card_get_drvdata(card);
+
+	printk(KERN_ERR"msm_swap_hph_switch_status: curr = %d  \n", g_hph_src_state);
+	gpio_status = msm_cdc_pinctrl_get_state(pdata->hph_switch_gpio_p);
+	printk(KERN_ERR"msm_swap_hph_switch_status: gpio_status = %d  \n", gpio_status);
+}
+/* MODIFIED-END by hongwei.tian,BUG-5867922*/
+
+#endif
+/* MODIFIED-END by hongwei.tian,BUG-5760547*/
 static int msm_populate_dai_link_component_of_node(
 		struct msm_asoc_mach_data *pdata,
 		struct snd_soc_card *card)
@@ -2840,7 +2959,6 @@ err:
 	return ret;
 }
 
-#ifdef USE_QC_SPK_AMP
 static int msm_wsa881x_init(struct snd_soc_component *component)
 {
 	u8 spkleft_ports[WSA881X_MAX_SWR_PORTS] = {100, 101, 102, 106};
@@ -3091,7 +3209,6 @@ static void msm_free_auxdev_mem(struct platform_device *pdev)
 		}
 	}
 }
-#endif
 
 static void i2s_auxpcm_init(struct platform_device *pdev)
 {
@@ -3140,6 +3257,95 @@ static const struct of_device_id sdm660_asoc_machine_of_match[]  = {
 	  .data = "tavil_codec"},
 	{},
 };
+/* MODIFIED-BEGIN by hongwei.tian, 2018-01-08,BUG-5860103*/
+static int config_hph_switch_gpio(struct snd_soc_codec *codec, int enable);
+
+int is_hph_switch_gpio_support(struct platform_device *pdev,
+			struct msm_asoc_mach_data *pdata)
+{
+	const char *hph_ext_pa = "qcom,msm-hph-ext-switch";
+	int ret = 0;
+
+	pr_debug("%s:Enter\n", __func__);
+
+	pdata->hph_ext_pa_gpio = of_get_named_gpio(pdev->dev.of_node,
+				hph_ext_pa, 0);
+
+	if (!gpio_is_valid(pdata->hph_ext_pa_gpio))
+		pdata->hph_ext_pa_gpio_p= of_parse_phandle(pdev->dev.of_node,
+					hph_ext_pa, 0);
+	if (!gpio_is_valid(pdata->hph_ext_pa_gpio) && (!pdata->hph_ext_pa_gpio_p)) {
+		dev_dbg(&pdev->dev, "property %s not detected in node %s",
+			hph_ext_pa, pdev->dev.of_node->full_name);
+	} else {
+		dev_dbg(&pdev->dev, "%s detected",
+			hph_ext_pa);
+		if(gpio_is_valid(pdata->hph_ext_pa_gpio))
+		{
+			ret = gpio_request(pdata->hph_ext_pa_gpio, "External HPH PA gpio");
+			if (ret) {
+				pr_err("%s: Failed to request external hph pa gpio %d error %d\n",
+					__func__, pdata->hph_ext_pa_gpio, ret);
+			}
+			gpio_direction_output(pdata->hph_ext_pa_gpio, 0);
+			msleep(5);
+			gpio_set_value_cansleep(pdata->hph_ext_pa_gpio, 0);
+		}
+		if (pdata->hph_ext_pa_gpio_p) {
+		ret = msm_cdc_pinctrl_select_sleep_state(
+					pdata->hph_ext_pa_gpio_p);
+		if (ret) {
+			pr_err("%s: gpio set cannot be de-activated %s\n",
+					__func__, "hph_ext_pa");
+		}
+	}
+
+		mbhc_cfg.codec_hph_switch_cb= config_hph_switch_gpio;
+	}
+
+	return 0;
+}
+
+static int config_hph_switch_gpio(struct snd_soc_codec *codec, int enable)
+{
+	struct snd_soc_card *card = codec->component.card;
+	struct msm_asoc_mach_data *pdata = snd_soc_card_get_drvdata(card);
+	int ret = 0;
+	int value;
+
+	pr_debug("%s: %s HPH Switch\n", __func__,
+		enable ? "On" : "Off");
+
+	if(gpio_is_valid(pdata->hph_ext_pa_gpio))
+	{
+		value = gpio_get_value_cansleep(pdata->us_euro_gpio);
+		pr_debug("%s: HPH_gpio : %d\n", __func__, value);
+		if (enable) {
+			gpio_set_value_cansleep(pdata->hph_ext_pa_gpio, 1);
+		} else {
+			gpio_set_value_cansleep(pdata->hph_ext_pa_gpio, 0);
+		}
+	}else if (pdata->hph_ext_pa_gpio_p) {
+
+		if (enable) {
+			ret = msm_cdc_pinctrl_select_active_state(
+						pdata->hph_ext_pa_gpio_p);
+			if (ret) {
+				pr_err("%s: gpio set cannot be de-activated %s\n",
+						__func__, "hph_ext_pa");
+			}
+		} else {
+			ret = msm_cdc_pinctrl_select_sleep_state(
+						pdata->hph_ext_pa_gpio_p);
+			if (ret) {
+				pr_err("%s: gpio set cannot be de-activated %s\n",
+						__func__, "hph_ext_pa");
+			}
+		}
+	}
+	return ret;
+}
+/* MODIFIED-END by hongwei.tian,BUG-5860103*/
 
 static int msm_asoc_machine_probe(struct platform_device *pdev)
 {
@@ -3200,15 +3406,10 @@ static int msm_asoc_machine_probe(struct platform_device *pdev)
 					"qcom,cdc-dmic-gpios", 0);
 		pdata->ext_spk_gpio_p = of_parse_phandle(pdev->dev.of_node,
 					"qcom,cdc-ext-spk-gpios", 0);
-	}
-	/* read Tertiary MI2S gpio configurations from dtsi file */
-	pdata->tert_mi2s_gpio_p = of_parse_phandle(pdev->dev.of_node,
-				"qcom,tert-mi2s-gpios", 0);
-	if (!pdata->tert_mi2s_gpio_p) {
-		dev_dbg(&pdev->dev, "property %s not detected in node %s",
-			"qcom,tert-mi2s-gpios", pdev->dev.of_node->full_name);
-	} else {
-		dev_dbg(&pdev->dev, "%s detected", "qcom,tert-mi2s-gpios");
+		/* MODIFIED-BEGIN by hongwei.tian, 2018-02-27,BUG-6028897*/
+		pdata->tert_mi2s_gpio_p = of_parse_phandle(pdev->dev.of_node,
+					"qcom,tert-mi2s-gpios", 0);
+					/* MODIFIED-END by hongwei.tian,BUG-6028897*/
 	}
 
 	/*
@@ -3228,12 +3429,88 @@ static int msm_asoc_machine_probe(struct platform_device *pdev)
 		dev_dbg(&pdev->dev, "%s detected",
 			"qcom,us-euro-gpios");
 		mbhc_cfg.swap_gnd_mic = msm_swap_gnd_mic;
+        #ifdef CONFIG_TCT_SDM660_COMMON
+		mbhc_cfg.swap_gnd_mic_reset = msm_swap_gnd_mic_reset; // MODIFIED by hongwei.tian, 2017-12-13,BUG-5760547
+		mbhc_cfg.swap_hph_switch_reset = msm_swap_hph_switch_reset;
+        #endif
 	}
+
+	/* MODIFIED-BEGIN by hongwei.tian, 2017-08-29,BUG-5232247*/
+#ifdef CONFIG_TCT_SDM660_COMMON
+	if(of_property_read_bool(pdev->dev.of_node, "switch_vdd-supply"))
+	{
+		pr_err("%s: switch_vdd need!",
+						__func__);
+		pdata->switch_vdd = devm_regulator_get(&pdev->dev,"switch_vdd");
+		if (!IS_ERR(pdata->switch_vdd))
+		{
+			/* MODIFIED-BEGIN by hongwei.tian, 2018-01-10,BUG-5867922*/
+			if (regulator_count_voltages(pdata->switch_vdd) > 0)
+			{
+				ret = regulator_set_voltage(pdata->switch_vdd, 2950000, 2950000); // MODIFIED by hongwei.tian, 2018-01-25,BUG-5929572
+				if (ret) {
+					pr_err("%s %d set vdd error\n", __func__, __LINE__);
+					return ret;
+				}
+			}
+			/* MODIFIED-END by hongwei.tian,BUG-5867922*/
+			ret = regulator_enable(pdata->switch_vdd);
+			if (ret < 0) {
+			pr_err("%s: switch_vdd enable failed !",
+						__func__);
+			return ret;
+			}
+		}
+	}
+
+	pdata->hph_switch_vdd_gpio = of_get_named_gpio(pdev->dev.of_node,
+				"hphlr-switch-vdd-gpios", 0);
+	if (gpio_is_valid(pdata->hph_switch_vdd_gpio)) {
+		ret = gpio_request(pdata->hph_switch_vdd_gpio, "hph_switch_vdd");
+		if (ret) {
+			dev_err(&pdev->dev,
+			"%s: unable to request hph_switch_vdd gpio [%d]\n",
+				__func__,
+				pdata->hph_switch_vdd_gpio);
+		}
+		ret = gpio_direction_output(pdata->hph_switch_vdd_gpio, 1);
+		if (ret) {
+			dev_err(&pdev->dev,
+				"%s: unable to set direction for hph_switch_vdd gpio [%d]\n",
+					__func__,
+					pdata->hph_switch_vdd_gpio);
+		}
+	} else {
+		dev_err(&pdev->dev,
+		"%s: hph_switch_vdd gpio not provided\n", __func__);
+	}
+
+	/* MODIFIED-BEGIN by hongwei.tian, 2017-09-01,BUG-5247152*/
+	pdata->hph_switch_gpio_p = of_parse_phandle(pdev->dev.of_node,
+					"hphlr-switch-gpios", 0);
+	if (pdata->hph_switch_gpio_p) {
+		ret = msm_cdc_pinctrl_select_active_state(
+					pdata->hph_switch_gpio_p);
+		if (ret) {
+			pr_err("%s: gpio set cannot be de-activated %s\n",
+					__func__, "hph_switch");
+		}
+	}
+#endif
+	/* MODIFIED-END by hongwei.tian,BUG-5247152*/
+		/* MODIFIED-END by hongwei.tian,BUG-5232247*/
 
 	ret = msm_prepare_us_euro(card);
 	if (ret)
 		dev_dbg(&pdev->dev, "msm_prepare_us_euro failed (%d)\n",
 			ret);
+
+	/* MODIFIED-BEGIN by hongwei.tian, 2018-01-08,BUG-5860103*/
+	ret = is_hph_switch_gpio_support(pdev, pdata);
+	if (ret < 0)
+		pr_err("%s:  doesn't support external hph switch\n",
+				__func__);
+				/* MODIFIED-END by hongwei.tian,BUG-5860103*/
 
 	i2s_auxpcm_init(pdev);
 
@@ -3247,13 +3524,11 @@ static int msm_asoc_machine_probe(struct platform_device *pdev)
 		goto err;
 	}
 
-#ifdef USE_QC_SPK_AMP
 	if (!of_property_read_bool(pdev->dev.of_node, "qcom,wsa-disable")) {
 		ret = msm_init_wsa_dev(pdev, card);
 		if (ret)
 			goto err;
 	}
-#endif
 
 	ret = devm_snd_soc_register_card(&pdev->dev, card);
 	if (ret == -EPROBE_DEFER) {
@@ -3271,12 +3546,8 @@ static int msm_asoc_machine_probe(struct platform_device *pdev)
 			ret);
 		goto err;
 	}
-
 	if (pdata->snd_card_val != INT_SND_CARD)
 		msm_ext_register_audio_notifier(pdev);
-
-	ext_spk_amp_support = of_property_read_bool(pdev->dev.of_node, "fih,ext-spk-amp-support");
-	fih_ext_spk_amp_init();
 
 	return 0;
 err:
@@ -3312,10 +3583,14 @@ static int msm_asoc_machine_remove(struct platform_device *pdev)
 		mutex_destroy(&pdata->cdc_int_mclk0_mutex);
 	else
 		msm_ext_cdc_deinit(pdata);
-
-#ifdef USE_QC_SPK_AMP
 	msm_free_auxdev_mem(pdev);
+
+	/* MODIFIED-BEGIN by hongwei.tian, 2017-08-29,BUG-5232247*/
+#ifdef CONFIG_TCT_SDM660_COMMON
+	if (!IS_ERR(pdata->switch_vdd))
+		regulator_disable(pdata->switch_vdd);
 #endif
+		/* MODIFIED-END by hongwei.tian,BUG-5232247*/
 
 	gpio_free(pdata->us_euro_gpio);
 	gpio_free(pdata->hph_en1_gpio);

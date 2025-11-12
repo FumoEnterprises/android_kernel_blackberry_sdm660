@@ -215,6 +215,7 @@ struct sdm660_cdc_priv {
 	/* Entry for version info */
 	struct snd_info_entry *entry;
 	struct snd_info_entry *version_entry;
+	int (*codec_hph_switch_cb)(struct snd_soc_codec *, int ); // MODIFIED by hongwei.tian, 2018-01-08,BUG-5860103
 };
 
 struct sdm660_cdc_pdata {
@@ -238,4 +239,9 @@ extern void msm_anlg_cdc_spk_ext_pa_cb(
 		int enable), struct snd_soc_codec *codec);
 int msm_anlg_codec_info_create_codec_entry(struct snd_info_entry *codec_root,
 					   struct snd_soc_codec *codec);
+
+/* MODIFIED-BEGIN by hongwei.tian, 2018-01-08,BUG-5860103*/
+extern void msm_anlg_cdc_hph_ext_switch_cb(
+		int (*codec_hph_ext_switch)(struct snd_soc_codec *codec, int enable), struct snd_soc_codec *codec);
+		/* MODIFIED-END by hongwei.tian,BUG-5860103*/
 #endif

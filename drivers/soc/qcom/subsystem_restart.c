@@ -1,4 +1,4 @@
-/* Copyright (c) 2011-2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2011-2017, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -48,6 +48,10 @@ module_param(disable_restart_work, uint, S_IRUGO | S_IWUSR);
 
 static int enable_debug;
 module_param(enable_debug, int, S_IRUGO | S_IWUSR);
+
+#ifdef CONFIG_MSM_SUBSYSTEM_RESTART
+char subsystem_panic[16];
+#endif
 
 /* The maximum shutdown timeout is the product of MAX_LOOPS and DELAY_MS. */
 #define SHUTDOWN_ACK_MAX_LOOPS	100
@@ -176,15 +180,12 @@ struct subsys_device {
 	dev_t dev_no;
 	struct completion err_ready;
 	enum crash_status crashed;
+#ifdef CONFIG_BBRY
+	bool supress_ramdump;
+#endif
 	int notif_state;
 	struct list_head list;
 };
-
-/*SSR_RAMDUMP_Porting_START*/
-#define MAX_SSR_REASON_LEN 81U
-extern char fih_failure_reason[MAX_SSR_REASON_LEN];
-bool disable_MDM_RamDump;
-/*SSR_RAMDUMP_Porting_END*/
 
 static struct subsys_device *to_subsys(struct device *d)
 {
@@ -541,12 +542,7 @@ static void notify_each_subsys_device(struct subsys_device **list,
 			send_sysmon_notif(dev);
 
 		notif_data.crashed = subsys_get_crash_status(dev);
-    /*SSR_RAMDUMP_Porting_START*/
-    if (((strcmp(dev->desc->name, "modem") == 0) && disable_MDM_RamDump) || (!(strcmp(dev->desc->name, "modem") == 0)))
-			notif_data.enable_ramdump = 0;
-		else
 		notif_data.enable_ramdump = is_ramdump_enabled(dev);
-    /*SSR_RAMDUMP_Porting_END*/ 
 		notif_data.enable_mini_ramdumps = enable_mini_ramdumps;
 		notif_data.no_auth = dev->desc->no_auth;
 		notif_data.pdev = pdev;
@@ -643,8 +639,8 @@ static int subsystem_shutdown(struct subsys_device *dev, void *data)
 static int subsystem_ramdump(struct subsys_device *dev, void *data)
 {
 	const char *name = dev->desc->name;
-        /*SSR_RAMDUMP_Porting*/
-	if (dev->desc->ramdump && ((strcmp(name, "modem") == 0) && !disable_MDM_RamDump))
+
+	if (dev->desc->ramdump)
 		if (dev->desc->ramdump(is_ramdump_enabled(dev), dev->desc) < 0)
 			pr_warn("%s[%s:%d]: Ramdump failed.\n",
 				name, current->comm, current->pid);
@@ -1004,18 +1000,6 @@ static void subsystem_restart_wq_func(struct work_struct *work)
 	pr_debug("[%s:%d]: Starting restart sequence for %s\n",
 			current->comm, current->pid, desc->name);
 	notify_each_subsys_device(list, count, SUBSYS_BEFORE_SHUTDOWN, NULL);
-        /*SSR_RAMDUMP_Porting_START*/
-	if ( (strcmp(desc->name, "modem") == 0) && enable_ramdumps ){
-		if (strstr(fih_failure_reason, "diagoem.c") != NULL || strstr(fih_failure_reason, "fih_qmi_svc.c") != NULL || strstr(fih_failure_reason, "IMS NV FUNCTION SSR triggle") != NULL){
-  		disable_MDM_RamDump = true;
-		}
-
-		//pr_debug("[%p]: disable_MDM_RamDump = %s, fih_failure_reason = %s.\n", current, (disable_MDM_RamDump?"TRUE":"FALSE"), fih_failure_reason);
-	}
-	else
-		disable_MDM_RamDump = false;
-        /*SSR_RAMDUMP_Porting_END*/
-
 	ret = for_each_subsys_device(list, count, NULL, subsystem_shutdown);
 	if (ret)
 		goto err;
@@ -1028,8 +1012,17 @@ static void subsystem_restart_wq_func(struct work_struct *work)
 	track->p_state = SUBSYS_RESTARTING;
 	spin_unlock_irqrestore(&track->s_lock, flags);
 
+#ifdef CONFIG_BBRY
+	if (dev->supress_ramdump)
+		pr_info("Expected modem reset, do not collect ram dumps for %s\n", desc->name);
+	else {
+		/* Collect ram dumps for all subsystems in order here */
+		for_each_subsys_device(list, count, NULL, subsystem_ramdump);
+	}
+#else
 	/* Collect ram dumps for all subsystems in order here */
 	for_each_subsys_device(list, count, NULL, subsystem_ramdump);
+#endif
 
 	for_each_subsys_device(list, count, NULL, subsystem_free_memory);
 
@@ -1041,12 +1034,6 @@ static void subsystem_restart_wq_func(struct work_struct *work)
 
 	pr_info("[%s:%d]: Restart sequence for %s completed.\n",
 			current->comm, current->pid, desc->name);
-  /*SSR_RAMDUMP_Porting_START*/
-  if ( strcmp(desc->name, "modem") == 0 ){
-		disable_MDM_RamDump = false;
-		//pr_debug("[%p]: disable_MDM_RamDump = %s.\n", current, (disable_MDM_RamDump?"TRUE":"FALSE"));
-	}
-  /*SSR_RAMDUMP_Porting_END*/
 
 err:
 	/* Reset subsys count */
@@ -1112,7 +1099,7 @@ int subsystem_restart_dev(struct subsys_device *dev)
 {
 	const char *name;
 
-	if ((!dev) || !get_device(&dev->dev))
+	if (!get_device(&dev->dev))
 		return -ENODEV;
 
 	if (!try_module_get(dev->owner)) {
@@ -1121,7 +1108,10 @@ int subsystem_restart_dev(struct subsys_device *dev)
 	}
 
 	name = dev->desc->name;
-
+#ifdef CONFIG_MSM_SUBSYSTEM_RESTART
+	memset(subsystem_panic, 0, sizeof(subsystem_panic));
+	memcpy(subsystem_panic, name, strlen(name));
+#endif
 	/*
 	 * If a system reboot/shutdown is underway, ignore subsystem errors.
 	 * However, print a message so that we know that a subsystem behaved
@@ -1161,6 +1151,23 @@ int subsystem_restart_dev(struct subsys_device *dev)
 	return 0;
 }
 EXPORT_SYMBOL(subsystem_restart_dev);
+
+#ifdef CONFIG_BBRY
+void subsystem_ramdump_indication(struct subsys_device *dev, unsigned int indication)
+{
+	pr_info("subsystem_ramdump_indication = %d.\n", indication);
+
+	if ( (indication & 0x1) == 0x1)
+		dev->supress_ramdump = true;
+	else
+		dev->supress_ramdump = false;
+
+	// force restart_level to RESET_SOC to invoke AP ramdump
+	if ( (indication & 0x2) == 0x2)
+		dev->restart_level = RESET_SOC;
+}
+EXPORT_SYMBOL(subsystem_ramdump_indication);
+#endif
 
 int subsystem_restart(const char *name)
 {
@@ -1206,21 +1213,11 @@ EXPORT_SYMBOL(subsystem_crashed);
 void subsys_set_crash_status(struct subsys_device *dev,
 				enum crash_status crashed)
 {
-	if (!dev) {
-		pr_err("Invalid subsystem device\n");
-		return;
-	}
-
 	dev->crashed = crashed;
 }
 
 enum crash_status subsys_get_crash_status(struct subsys_device *dev)
 {
-	if (!dev) {
-		pr_err("Invalid subsystem device\n");
-		return CRASH_STATUS_NO_CRASH;
-	}
-
 	return dev->crashed;
 }
 
@@ -1820,6 +1817,9 @@ static struct notifier_block panic_nb = {
 static int __init subsys_restart_init(void)
 {
 	int ret;
+#ifdef CONFIG_MSM_DLOAD_MODE
+	sprintf(subsystem_panic, "%s", "unknown");
+#endif /* CONFIG_MSM_DLOAD_MODE */
 
 	ssr_wq = alloc_workqueue("ssr_wq", WQ_CPU_INTENSIVE, 0);
 	BUG_ON(!ssr_wq);

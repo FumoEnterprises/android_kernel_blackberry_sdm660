@@ -1,4 +1,4 @@
-/* Copyright (c) 2016-2019 The Linux Foundation. All rights reserved.
+/* Copyright (c) 2016-2017, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -256,8 +256,8 @@ static int msm_int_enable_sdw_cdc_clk(struct msm_sdw_priv *msm_sdw,
 			msm_sdw->int_mclk1_enabled = false;
 		}
 	}
-rtn:
 	mutex_unlock(&msm_sdw->cdc_int_mclk1_mutex);
+rtn:
 	return ret;
 }
 EXPORT_SYMBOL(msm_int_enable_sdw_cdc_clk);
@@ -471,9 +471,9 @@ static int msm_sdw_codec_enable_vi_feedback(struct snd_soc_dapm_widget *w,
 				MSM_SDW_TX10_SPKR_PROT_PATH_CTL, 0x20,
 				0x20);
 			snd_soc_update_bits(codec,
-				MSM_SDW_TX9_SPKR_PROT_PATH_CTL, 0x0F, 0x00);
+				MSM_SDW_TX9_SPKR_PROT_PATH_CTL, 0x0F, 0x04);
 			snd_soc_update_bits(codec,
-				MSM_SDW_TX10_SPKR_PROT_PATH_CTL, 0x0F, 0x00);
+				MSM_SDW_TX10_SPKR_PROT_PATH_CTL, 0x0F, 0x04);
 			snd_soc_update_bits(codec,
 				MSM_SDW_TX9_SPKR_PROT_PATH_CTL, 0x10, 0x10);
 			snd_soc_update_bits(codec,
@@ -496,10 +496,10 @@ static int msm_sdw_codec_enable_vi_feedback(struct snd_soc_dapm_widget *w,
 				0x20);
 			snd_soc_update_bits(codec,
 				MSM_SDW_TX11_SPKR_PROT_PATH_CTL, 0x0F,
-				0x00);
+				0x04);
 			snd_soc_update_bits(codec,
 				MSM_SDW_TX12_SPKR_PROT_PATH_CTL, 0x0F,
-				0x00);
+				0x04);
 			snd_soc_update_bits(codec,
 				MSM_SDW_TX11_SPKR_PROT_PATH_CTL, 0x10,
 				0x10);
@@ -1871,8 +1871,7 @@ static int msm_sdw_probe(struct platform_device *pdev)
 	int adsp_state;
 
 	adsp_state = apr_get_subsys_state();
-	if (adsp_state != APR_SUBSYS_LOADED ||
-		!q6core_is_adsp_ready()) {
+	if (adsp_state != APR_SUBSYS_LOADED) {
 		dev_err(&pdev->dev, "Adsp is not loaded yet %d\n",
 				adsp_state);
 		return -EPROBE_DEFER;

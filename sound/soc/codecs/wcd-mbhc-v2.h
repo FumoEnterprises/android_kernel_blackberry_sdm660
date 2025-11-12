@@ -270,6 +270,10 @@ struct wcd_mbhc_config {
 	bool detect_extn_cable;
 	bool mono_stero_detection;
 	bool (*swap_gnd_mic)(struct snd_soc_codec *codec);
+#ifdef CONFIG_TCT_SDM660_COMMON
+	bool (*swap_gnd_mic_reset)(struct snd_soc_codec *codec); // MODIFIED by hongwei.tian, 2017-12-13,BUG-5760547
+	bool (*swap_hph_switch_reset)(struct snd_soc_codec *codec , bool status);
+#endif
 	bool hs_ext_micbias;
 	bool gnd_det_en;
 	int key_code[WCD_MBHC_KEYCODE_NUM];
@@ -279,11 +283,8 @@ struct wcd_mbhc_config {
 	int anc_micbias;
 	bool enable_anc_mic_detect;
 	u32 enable_usbc_analog;
-	//fihtdc, 2018017 Dennis, add for customized debounce
-	int fih_debounce;
 	struct usbc_ana_audio_config usbc_analog_cfg;
-	//add for new/old HW support FAO-4
-	bool fih_hs_support;
+	int (*codec_hph_switch_cb)(struct snd_soc_codec *, int); // MODIFIED by hongwei.tian, 2018-01-08,BUG-5860103
 };
 
 struct wcd_mbhc_intr {
@@ -474,6 +475,10 @@ struct wcd_mbhc {
 	struct notifier_block psy_nb;
 	struct power_supply *usb_psy;
 	struct work_struct usbc_analog_work;
+#ifdef CONFIG_TCT_SDM660_COMMON
+	bool is_selfie_stick_insert; // MODIFIED by hongwei.tian, 2017-12-13,BUG-5760547
+#endif
+	bool force_linein;
 };
 #define WCD_MBHC_CAL_SIZE(buttons, rload) ( \
 	sizeof(struct wcd_mbhc_general_cfg) + \

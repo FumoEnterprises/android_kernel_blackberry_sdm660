@@ -9,6 +9,7 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  */
+#define DEBUG // MODIFIED by hongwei.tian, 2017-12-13,BUG-5760547
 #include <linux/module.h>
 #include <linux/init.h>
 #include <linux/slab.h>
@@ -56,48 +57,11 @@
 #define WCD_MBHC_SPL_HS_CNT  1
 
 static int det_extn_cable_en;
+
+
 module_param(det_extn_cable_en, int,
 		S_IRUGO | S_IWUSR | S_IWGRP);
 MODULE_PARM_DESC(det_extn_cable_en, "enable/disable extn cable detect");
-
-//2015.3.12, Add switch device for FTM request FAO-4
-#define LEGACY_SWITCH_DEV_SUPPORT
-#ifdef LEGACY_SWITCH_DEV_SUPPORT
-#include <linux/switch.h>
-#include <asm/atomic.h>
-
-struct h2w_info {
-	struct switch_dev sdev;
-	atomic_t btn_state;
-	atomic_t hs_state;
-};
-static struct h2w_info *fih_hs;
-
-static ssize_t trout_h2w_print_name(struct switch_dev *sdev, char *buf)
-{
-       int state = 0;
-       state = switch_get_state(&fih_hs->sdev);
-
-	switch (state) 
-	{
-		case MBHC_PLUG_TYPE_NONE:
-			return sprintf(buf, "No Device\n");
-		case MBHC_PLUG_TYPE_HEADSET:         
-			return sprintf(buf, "Headset\n");
-		case MBHC_PLUG_TYPE_HEADPHONE: 
-			return sprintf(buf, "Headphone\n");
-	}
-
-	return -EINVAL;
-}
-static ssize_t show_btn_state(struct device *dev,struct device_attribute *attr, char *buf)
-{
-	unsigned char btn_state;
-	btn_state = atomic_read(&fih_hs->btn_state);
-	return sprintf(buf, "%u\n", btn_state);
-}
-static DEVICE_ATTR(btn_state, S_IRUGO, show_btn_state, NULL);
-#endif
 
 enum wcd_mbhc_cs_mb_en_flag {
 	WCD_MBHC_EN_CS = 0,
@@ -105,10 +69,12 @@ enum wcd_mbhc_cs_mb_en_flag {
 	WCD_MBHC_EN_PULLUP,
 	WCD_MBHC_EN_NONE,
 };
-
-static void wcd_enable_mbhc_supply(struct wcd_mbhc *mbhc,
-			enum wcd_mbhc_plug_type plug_type);
-
+/* MODIFIED-BEGIN by hongwei.tian, 2018-01-10,BUG-5867922*/
+#ifdef CONFIG_TCT_SDM660_COMMON
+extern void msm_swap_hph_switch_status(struct snd_soc_codec *codec);
+int hph_in_detecting;
+#endif
+/* MODIFIED-END by hongwei.tian,BUG-5867922*/
 static void wcd_mbhc_jack_report(struct wcd_mbhc *mbhc,
 				struct snd_soc_jack *jack, int status, int mask)
 {
@@ -699,6 +665,7 @@ static void wcd_mbhc_report_plug(struct wcd_mbhc *mbhc, int insertion,
 		hphrocp_off_report(mbhc, SND_JACK_OC_HPHR);
 		hphlocp_off_report(mbhc, SND_JACK_OC_HPHL);
 		mbhc->current_plug = MBHC_PLUG_TYPE_NONE;
+		mbhc->force_linein = false;
 	} else {
 		/*
 		 * Report removal of current jack type.
@@ -746,14 +713,20 @@ static void wcd_mbhc_report_plug(struct wcd_mbhc *mbhc, int insertion,
 						WCD_MBHC_ELECT_DETECTION_TYPE,
 						0);
 				usleep_range(200, 210);
-				wcd_mbhc_hs_elec_irq(mbhc,
-						     WCD_MBHC_ELEC_HS_REM,
-						     true);
+				/* MODIFIED-BEGIN by hongwei.tian, 2017-12-13,BUG-5760547*/
+                        #ifdef CONFIG_TCT_SDM660_COMMON
+				if(!mbhc->is_selfie_stick_insert)
+                        #endif
+					wcd_mbhc_hs_elec_irq(mbhc,
+							     WCD_MBHC_ELEC_HS_REM,
+							     true);
+							     /* MODIFIED-END by hongwei.tian,BUG-5760547*/
 			}
 			mbhc->hph_status &= ~(SND_JACK_HEADSET |
 						SND_JACK_LINEOUT |
 						SND_JACK_ANC_HEADPHONE |
 						SND_JACK_UNSUPPORTED);
+			mbhc->force_linein = false;
 		}
 
 		if (mbhc->current_plug == MBHC_PLUG_TYPE_HEADSET &&
@@ -775,6 +748,12 @@ static void wcd_mbhc_report_plug(struct wcd_mbhc *mbhc, int insertion,
 
 		if (mbhc->mbhc_cb->hph_pa_on_status)
 			is_pa_on = mbhc->mbhc_cb->hph_pa_on_status(codec);
+		/* MODIFIED-BEGIN by hongwei.tian, 2017-12-13,BUG-5760547*/
+        #ifdef CONFIG_TCT_SDM660_COMMON
+		if(mbhc->is_selfie_stick_insert)
+			mbhc->jiffies_atreport = jiffies;
+        #endif
+			/* MODIFIED-END by hongwei.tian,BUG-5760547*/
 
 		if (mbhc->impedance_detect &&
 			mbhc->mbhc_cb->compute_impedance &&
@@ -788,6 +767,7 @@ static void wcd_mbhc_report_plug(struct wcd_mbhc *mbhc, int insertion,
 				 mbhc->zr < MAX_IMPED) &&
 				(jack_type == SND_JACK_HEADPHONE)) {
 				jack_type = SND_JACK_LINEOUT;
+				mbhc->force_linein = true;
 				mbhc->current_plug = MBHC_PLUG_TYPE_HIGH_HPH;
 				if (mbhc->hph_status) {
 					mbhc->hph_status &= ~(SND_JACK_HEADSET |
@@ -812,16 +792,6 @@ static void wcd_mbhc_report_plug(struct wcd_mbhc *mbhc, int insertion,
 				    WCD_MBHC_JACK_MASK);
 		wcd_mbhc_clr_and_turnon_hph_padac(mbhc);
 	}
-
-//Add switch device for FTM request FAO-4
-#ifdef LEGACY_SWITCH_DEV_SUPPORT
-		if(!mbhc->mbhc_cfg->fih_hs_support && fih_hs)
-		{
-			switch_set_state(&fih_hs->sdev, mbhc->current_plug);
-			pr_info("%s: switch_set_state %d\n", __func__, mbhc->current_plug);
-		}
-#endif
-
 	pr_debug("%s: leave hph_status %x\n", __func__, mbhc->hph_status);
 }
 
@@ -939,30 +909,10 @@ static void wcd_mbhc_find_plug_and_report(struct wcd_mbhc *mbhc,
 						SND_JACK_HEADPHONE);
 			if (mbhc->current_plug == MBHC_PLUG_TYPE_HEADSET)
 				wcd_mbhc_report_plug(mbhc, 0, SND_JACK_HEADSET);
-		//wcd_mbhc_report_plug(mbhc, 1, SND_JACK_UNSUPPORTED);
-			/* 
-			* calculate impedance detection 
-			* If Zl and Zr > 20k then it is special accessory 
-			* otherwise unsupported cable. 
-			*/ 
-			pr_debug("%s: plug_type == MBHC_PLUG_TYPE_GND_MIC_SWAP \n", __func__); 
-			if (mbhc->impedance_detect && mbhc->mbhc_cb->compute_impedance) { 
-				mbhc->mbhc_cb->compute_impedance(mbhc, &mbhc->zl, &mbhc->zr); 
-				if ((mbhc->zl > 20000) && (mbhc->zr > 20000)) { 
-					pr_debug("%s: special accessory \n", __func__); 
-					/* Toggle switch back */ 
-					if (mbhc->mbhc_cfg->swap_gnd_mic && 
-						mbhc->mbhc_cfg->swap_gnd_mic(mbhc->codec)) { 
-						pr_debug("%s: US_EU gpio present,flip switch again\n" , __func__); 
-					} 
-					/* enable CS/MICBIAS for headset button detection to work */ 
-					wcd_enable_mbhc_supply(mbhc, MBHC_PLUG_TYPE_HEADSET); 
-					wcd_mbhc_report_plug(mbhc, 1, SND_JACK_HEADSET); 
-				} 
-				else { 
-					wcd_mbhc_report_plug(mbhc, 1, SND_JACK_UNSUPPORTED); 
-				} 
-			} 
+		wcd_mbhc_report_plug(mbhc, 1, SND_JACK_UNSUPPORTED);
+        #ifdef CONFIG_TCT_SDM660_COMMON
+		mbhc->is_selfie_stick_insert = true; // MODIFIED by hongwei.tian, 2017-12-13,BUG-5760547
+        #endif
 	} else if (plug_type == MBHC_PLUG_TYPE_HEADSET) {
 		if (mbhc->mbhc_cfg->enable_anc_mic_detect)
 			anc_mic_found = wcd_mbhc_detect_anc_plug_type(mbhc);
@@ -977,7 +927,11 @@ static void wcd_mbhc_find_plug_and_report(struct wcd_mbhc *mbhc,
 		 */
 		wcd_mbhc_report_plug(mbhc, 1, jack_type);
 	} else if (plug_type == MBHC_PLUG_TYPE_HIGH_HPH) {
+        #ifdef CONFIG_TCT_SDM660_COMMON
+		if (mbhc->mbhc_cfg->detect_extn_cable && !mbhc->is_selfie_stick_insert) { // MODIFIED by hongwei.tian, 2017-12-13,BUG-5760547
+        #else
 		if (mbhc->mbhc_cfg->detect_extn_cable) {
+        #endif
 			/* High impedance device found. Report as LINEOUT */
 			wcd_mbhc_report_plug(mbhc, 1, SND_JACK_LINEOUT);
 			pr_debug("%s: setup mic trigger for further detection\n",
@@ -998,26 +952,7 @@ static void wcd_mbhc_find_plug_and_report(struct wcd_mbhc *mbhc,
 			wcd_mbhc_hs_elec_irq(mbhc, WCD_MBHC_ELEC_HS_INS,
 					     true);
 		} else {
-			/* 
-			* calculate impedance detection 
-			* If Zl and Zr > 20k then it is special accessory 
-			* otherwise unsupported cable. 
-			*/ 
-			if (mbhc->impedance_detect && mbhc->mbhc_cb->compute_impedance) { 
-				mbhc->mbhc_cb->compute_impedance(mbhc, &mbhc->zl, &mbhc->zr); 
-				if ((mbhc->zl > 20000) && (mbhc->zr > 20000)) { 
-					pr_debug("%s: special accessory \n", __func__); 
-					/* Toggle switch back */ 
-					if (mbhc->mbhc_cfg->swap_gnd_mic && 
-						mbhc->mbhc_cfg->swap_gnd_mic(mbhc->codec)) { 
-						pr_debug("%s: US_EU gpio present,flip switch again\n" , __func__); 
-					} 
-
-					wcd_mbhc_report_plug(mbhc, 1, SND_JACK_HEADSET); 
-				} 
-				else		
-					wcd_mbhc_report_plug(mbhc, 1, SND_JACK_LINEOUT);
-			}
+			wcd_mbhc_report_plug(mbhc, 1, SND_JACK_LINEOUT);
 		}
 	} else {
 		WARN(1, "Unexpected current plug_type %d, plug_type %d\n",
@@ -1046,6 +981,7 @@ static int wcd_check_cross_conn(struct wcd_mbhc *mbhc)
 			return false;
 
 	WCD_MBHC_REG_READ(WCD_MBHC_ELECT_SCHMT_ISRC, reg1);
+	pr_debug("%s: ISRC_res  0x%x\n", __func__, reg1); // MODIFIED by hongwei.tian, 2018-01-10,BUG-5867922
 	/*
 	 * Check if there is any cross connection,
 	 * Micbias and schmitt trigger (HPHL-HPHR)
@@ -1056,9 +992,10 @@ static int wcd_check_cross_conn(struct wcd_mbhc *mbhc)
 	 */
 	wcd_enable_curr_micbias(mbhc, WCD_MBHC_EN_MB);
 	WCD_MBHC_REG_UPDATE_BITS(WCD_MBHC_ELECT_SCHMT_ISRC, 2);
-
+	/* MODIFIED-BEGIN by hongwei.tian, 2018-01-10,BUG-5867922*/
 	WCD_MBHC_REG_READ(WCD_MBHC_ELECT_RESULT, swap_res);
-	pr_debug("%s: swap_res%x\n", __func__, swap_res);
+	pr_debug("%s: swap_res  0x%x\n", __func__, swap_res);
+	/* MODIFIED-END by hongwei.tian,BUG-5867922*/
 
 	/*
 	 * Read reg hphl and hphr schmitt result with cross connection
@@ -1229,6 +1166,17 @@ static void wcd_enable_mbhc_supply(struct wcd_mbhc *mbhc,
 							WCD_MBHC_EN_CS);
 		} else if (plug_type == MBHC_PLUG_TYPE_HEADPHONE) {
 			wcd_enable_curr_micbias(mbhc, WCD_MBHC_EN_CS);
+		/* MODIFIED-BEGIN by hongwei.tian, 2017-12-13,BUG-5760547*/
+        #ifdef CONFIG_TCT_SDM660_COMMON
+		} else if (mbhc->is_selfie_stick_insert){
+				if (mbhc->mbhc_cfg->swap_gnd_mic_reset &&
+					mbhc->mbhc_cfg->swap_gnd_mic_reset(codec)) {
+						pr_debug("%s: US_EU gpio present,flip switch again\n"
+							, __func__);
+				}
+				wcd_enable_curr_micbias(mbhc,WCD_MBHC_EN_MB);
+				/* MODIFIED-END by hongwei.tian,BUG-5760547*/
+        #endif
 		} else {
 			wcd_enable_curr_micbias(mbhc, WCD_MBHC_EN_NONE);
 		}
@@ -1328,6 +1276,7 @@ static void wcd_correct_swch_plug(struct work_struct *work)
 	WCD_MBHC_REG_READ(WCD_MBHC_BTN_RESULT, btn_result);
 	WCD_MBHC_REG_READ(WCD_MBHC_HS_COMP_RESULT, hs_comp_res);
 
+	pr_debug("%s: hs_comp_res: %x btn_result : %x selfie_stick : %x \n", __func__, hs_comp_res,btn_result,mbhc->is_selfie_stick_insert); // MODIFIED by hongwei.tian, 2017-12-13,BUG-5760547
 	if (!rc) {
 		pr_debug("%s No btn press interrupt\n", __func__);
 		if (!btn_result && !hs_comp_res)
@@ -1342,6 +1291,17 @@ static void wcd_correct_swch_plug(struct work_struct *work)
 		else
 			plug_type = MBHC_PLUG_TYPE_INVALID;
 	}
+
+
+	/* MODIFIED-BEGIN by hongwei.tian, 2017-12-13,BUG-5760547*/
+#ifdef CONFIG_TCT_SDM660_COMMON
+	if(mbhc->is_selfie_stick_insert)
+	{
+		pr_debug("%s: stick plug type is %d\n",__func__, plug_type);
+		goto report;
+	}
+#endif
+	/* MODIFIED-END by hongwei.tian,BUG-5760547*/
 
 	do {
 		cross_conn = wcd_check_cross_conn(mbhc);
@@ -1366,6 +1326,7 @@ static void wcd_correct_swch_plug(struct work_struct *work)
 		WCD_MBHC_RSC_LOCK(mbhc);
 		wcd_mbhc_find_plug_and_report(mbhc, plug_type);
 		WCD_MBHC_RSC_UNLOCK(mbhc);
+		pr_debug("%s: early report plug type is %d\n",__func__, plug_type); // MODIFIED by hongwei.tian, 2018-01-25,BUG-5929027
 	}
 
 correct_plug_type:
@@ -1489,6 +1450,7 @@ correct_plug_type:
 
 		WCD_MBHC_REG_READ(WCD_MBHC_HPHL_SCHMT_RESULT, hphl_sch);
 		WCD_MBHC_REG_READ(WCD_MBHC_MIC_SCHMT_RESULT, mic_sch);
+		pr_debug("%s: hs_comp_res : %x  hphl_sch: %x mic_sch : %x \n", __func__, hs_comp_res , hphl_sch , mic_sch); // MODIFIED by hongwei.tian, 2017-12-13,BUG-5760547
 		if (hs_comp_res && !(hphl_sch || mic_sch)) {
 			pr_debug("%s: cable is extension cable\n", __func__);
 			plug_type = MBHC_PLUG_TYPE_HIGH_HPH;
@@ -1533,7 +1495,11 @@ correct_plug_type:
 	if (!wrk_complete && mbhc->btn_press_intr) {
 		pr_debug("%s: Can be slow insertion of headphone\n", __func__);
 		wcd_cancel_btn_work(mbhc);
-		plug_type = MBHC_PLUG_TYPE_HEADPHONE;
+		/* Report as headphone only if previously
+		 * not reported as lineout
+		 */
+		if (!mbhc->force_linein)
+			plug_type = MBHC_PLUG_TYPE_HEADPHONE;
 	}
 	/*
 	 * If plug_tye is headset, we might have already reported either in
@@ -1576,7 +1542,7 @@ enable_supply:
 	if (mbhc->mbhc_cb->mbhc_micbias_control)
 		wcd_mbhc_update_fsm_source(mbhc, plug_type);
 	else
-		wcd_enable_mbhc_supply(mbhc, mbhc->current_plug);
+		wcd_enable_mbhc_supply(mbhc, plug_type);
 exit:
 	if (mbhc->mbhc_cb->mbhc_micbias_control &&
 	    !mbhc->micbias_enable)
@@ -1612,6 +1578,7 @@ exit:
 								MIC_BIAS_2);
 	}
 
+#ifndef CONFIG_TCT_SDM660_COMMON
 	if (mbhc->mbhc_cfg->detect_extn_cable &&
 	    ((plug_type == MBHC_PLUG_TYPE_HEADPHONE) ||
 	     (plug_type == MBHC_PLUG_TYPE_HEADSET)) &&
@@ -1620,6 +1587,7 @@ exit:
 		wcd_mbhc_hs_elec_irq(mbhc, WCD_MBHC_ELEC_HS_REM, true);
 		WCD_MBHC_RSC_UNLOCK(mbhc);
 	}
+#endif
 	if (mbhc->mbhc_cb->set_cap_mode)
 		mbhc->mbhc_cb->set_cap_mode(codec, micbias1, micbias2);
 
@@ -1627,6 +1595,14 @@ exit:
 		mbhc->mbhc_cb->hph_pull_down_ctrl(codec, true);
 
 	mbhc->mbhc_cb->lock_sleep(mbhc, false);
+/* MODIFIED-BEGIN by hongwei.tian, 2018-01-10,BUG-5867922*/
+#ifdef CONFIG_TCT_SDM660_COMMON
+	if(mbhc->mbhc_cfg->swap_hph_switch_reset)
+		mbhc->mbhc_cfg->swap_hph_switch_reset(codec,0);
+	hph_in_detecting = 0;
+	pr_debug("%s: PHP detecting done ! Set to AKM side \n",__func__); // MODIFIED by hongwei.tian, 2018-01-25,BUG-5929027
+#endif
+/* MODIFIED-END by hongwei.tian,BUG-5867922*/
 	pr_debug("%s: leave\n", __func__);
 }
 
@@ -1672,7 +1648,7 @@ static void wcd_mbhc_swch_irq_handler(struct wcd_mbhc *mbhc)
 	WCD_MBHC_RSC_LOCK(mbhc);
 
 	mbhc->in_swch_irq_handler = true;
-
+	msm_swap_hph_switch_status(codec); // MODIFIED by hongwei.tian, 2018-01-10,BUG-5867922
 	/* cancel pending button press */
 	if (wcd_cancel_btn_work(mbhc))
 		pr_debug("%s: button press is canceled\n", __func__);
@@ -1693,7 +1669,22 @@ static void wcd_mbhc_swch_irq_handler(struct wcd_mbhc *mbhc)
 
 	if ((mbhc->current_plug == MBHC_PLUG_TYPE_NONE) &&
 	    detection_type) {
+/* MODIFIED-BEGIN by hongwei.tian, 2018-01-10,BUG-5867922*/
+#ifdef CONFIG_TCT_SDM660_COMMON
+		if(mbhc->mbhc_cfg->swap_hph_switch_reset)
+		{
+			hph_in_detecting = 1;
+			mbhc->mbhc_cfg->swap_hph_switch_reset(codec,1);
+		}
+#endif
+/* MODIFIED-END by hongwei.tian,BUG-5867922*/
 		/* Make sure MASTER_BIAS_CTL is enabled */
+		/* MODIFIED-BEGIN by hongwei.tian, 2018-01-08,BUG-5860103*/
+		if(mbhc->mbhc_cfg->codec_hph_switch_cb)
+		{
+			mbhc->mbhc_cfg->codec_hph_switch_cb(codec,1);
+		}
+		/* MODIFIED-END by hongwei.tian,BUG-5860103*/
 		mbhc->mbhc_cb->mbhc_bias(codec, true);
 
 		if (mbhc->mbhc_cb->mbhc_common_micb_ctrl)
@@ -1718,9 +1709,16 @@ static void wcd_mbhc_swch_irq_handler(struct wcd_mbhc *mbhc)
 			mbhc->mbhc_cb->enable_mb_source(mbhc, true);
 		mbhc->btn_press_intr = false;
 		mbhc->is_btn_press = false;
+        #ifdef CONFIG_TCT_SDM660_COMMON
+		mbhc->is_selfie_stick_insert = false; // MODIFIED by hongwei.tian, 2017-12-13,BUG-5760547
+        #endif
 		wcd_mbhc_detect_plug_type(mbhc);
 	} else if ((mbhc->current_plug != MBHC_PLUG_TYPE_NONE)
 			&& !detection_type) {
+		/* MODIFIED-BEGIN by hongwei.tian, 2018-01-08,BUG-5860103*/
+		if(mbhc->mbhc_cfg->codec_hph_switch_cb)
+			mbhc->mbhc_cfg->codec_hph_switch_cb(codec,0);
+			/* MODIFIED-END by hongwei.tian,BUG-5860103*/
 		/* Disable external voltage source to micbias if present */
 		if (mbhc->mbhc_cb->enable_mb_source)
 			mbhc->mbhc_cb->enable_mb_source(mbhc, false);
@@ -1736,6 +1734,9 @@ static void wcd_mbhc_swch_irq_handler(struct wcd_mbhc *mbhc)
 
 		mbhc->btn_press_intr = false;
 		mbhc->is_btn_press = false;
+        #ifdef CONFIG_TCT_SDM660_COMMON
+		mbhc->is_selfie_stick_insert = false; // MODIFIED by hongwei.tian, 2017-12-13,BUG-5760547
+        #endif
 		if (mbhc->current_plug == MBHC_PLUG_TYPE_HEADPHONE) {
 			wcd_mbhc_hs_elec_irq(mbhc, WCD_MBHC_ELEC_HS_REM,
 					     false);
@@ -1781,6 +1782,10 @@ static void wcd_mbhc_swch_irq_handler(struct wcd_mbhc *mbhc)
 			wcd_mbhc_report_plug(mbhc, 0, SND_JACK_ANC_HEADPHONE);
 		}
 	} else if (!detection_type) {
+		/* MODIFIED-BEGIN by hongwei.tian, 2018-01-08,BUG-5860103*/
+		if(mbhc->mbhc_cfg->codec_hph_switch_cb)
+			mbhc->mbhc_cfg->codec_hph_switch_cb(codec,0);
+			/* MODIFIED-END by hongwei.tian,BUG-5860103*/
 		/* Disable external voltage source to micbias if present */
 		if (mbhc->mbhc_cb->enable_mb_source)
 			mbhc->mbhc_cb->enable_mb_source(mbhc, false);
@@ -1818,6 +1823,11 @@ static int wcd_mbhc_get_button_mask(struct wcd_mbhc *mbhc)
 	int btn;
 
 	btn = mbhc->mbhc_cb->map_btn_code_to_num(mbhc->codec);
+
+	/* MODIFIED-BEGIN by hongwei.tian, 2017-11-30,BUG-5706622*/
+	if(mbhc->mbhc_cfg->key_code[btn] == 0)
+		return 0;
+		/* MODIFIED-END by hongwei.tian,BUG-5706622*/
 
 	switch (btn) {
 	case 0:
@@ -1885,6 +1895,15 @@ static irqreturn_t wcd_mbhc_hs_ins_irq(int irq, void *data)
 						WCD_MBHC_ELECT_SCHMT_ISRC,
 						0);
 				msleep(20);
+				/* MODIFIED-BEGIN by hongwei.tian, 2017-12-13,BUG-5760547*/
+                #ifdef CONFIG_TCT_SDM660_COMMON
+				if(mic_trigerred >50)
+				{
+					mbhc->is_selfie_stick_insert = true;
+					goto determine_plug;
+				}
+                #endif
+				/* MODIFIED-END by hongwei.tian,BUG-5760547*/
 				WCD_MBHC_REG_UPDATE_BITS(
 						WCD_MBHC_ELECT_SCHMT_ISRC,
 						1);
@@ -2060,15 +2079,6 @@ static void wcd_btn_lpress_fn(struct work_struct *work)
 		wcd_mbhc_jack_report(mbhc, &mbhc->button_jack,
 				mbhc->buttons_pressed, mbhc->buttons_pressed);
 	}
-//Add switch device for FTM request FAO-4
-#ifdef LEGACY_SWITCH_DEV_SUPPORT
-		if(!mbhc->mbhc_cfg->fih_hs_support && fih_hs)
-		{
-			atomic_set(&fih_hs->btn_state, 1); 
-			pr_info("%s: switch_set_btn_state press(0x%x)\n", __func__, mbhc->buttons_pressed);
-		}
-#endif
-
 	pr_debug("%s: leave\n", __func__);
 	mbhc->mbhc_cb->lock_sleep(mbhc, false);
 }
@@ -2130,7 +2140,11 @@ static irqreturn_t wcd_mbhc_btn_press_handler(int irq, void *data)
 	if (mask == SND_JACK_BTN_0)
 		mbhc->btn_press_intr = true;
 
+#ifdef CONFIG_TCT_SDM660_COMMON
+	if (mbhc->current_plug != MBHC_PLUG_TYPE_HEADSET && !mbhc->is_selfie_stick_insert) { // MODIFIED by hongwei.tian, 2017-12-13,BUG-5760547
+#else
 	if (mbhc->current_plug != MBHC_PLUG_TYPE_HEADSET) {
+#endif
 		pr_debug("%s: Plug isn't headset, ignore button press\n",
 				__func__);
 		goto done;
@@ -2184,14 +2198,6 @@ static irqreturn_t wcd_mbhc_release_handler(int irq, void *data)
 				 __func__);
 			wcd_mbhc_jack_report(mbhc, &mbhc->button_jack,
 					0, mbhc->buttons_pressed);
-//Add switch device for FTM request FAO-4
-#ifdef LEGACY_SWITCH_DEV_SUPPORT
-			if(!mbhc->mbhc_cfg->fih_hs_support && fih_hs)
-			{
-				atomic_set(&fih_hs->btn_state, 0); 
-				pr_info("%s: switch_set_btn_state release\n", __func__);
-			}
-#endif
 		} else {
 			if (mbhc->in_swch_irq_handler) {
 				pr_debug("%s: Switch irq kicked in, ignore\n",
@@ -2203,27 +2209,11 @@ static irqreturn_t wcd_mbhc_release_handler(int irq, void *data)
 						     &mbhc->button_jack,
 						     mbhc->buttons_pressed,
 						     mbhc->buttons_pressed);
-//Add switch device for FTM request FAO-4
-#ifdef LEGACY_SWITCH_DEV_SUPPORT
-				if(!mbhc->mbhc_cfg->fih_hs_support && fih_hs)
-				{
-					atomic_set(&fih_hs->btn_state, 1); 
-					pr_info("%s: switch_set_btn_state press(0x%x)\n", __func__, mbhc->buttons_pressed);
-				}
-#endif
 				pr_debug("%s: Reporting btn release\n",
 					 __func__);
 				wcd_mbhc_jack_report(mbhc,
 						&mbhc->button_jack,
 						0, mbhc->buttons_pressed);
-//Add switch device for FTM request FAO-4
-#ifdef LEGACY_SWITCH_DEV_SUPPORT
-				if(!mbhc->mbhc_cfg->fih_hs_support && fih_hs)
-				{
-					atomic_set(&fih_hs->btn_state, 0); 
-					pr_info("%s: switch_set_btn_state release\n", __func__);
-				}
-#endif
 			}
 		}
 		mbhc->buttons_pressed &= ~WCD_MBHC_JACK_BUTTON_MASK;
@@ -2357,10 +2347,8 @@ static int wcd_mbhc_initialise(struct wcd_mbhc *mbhc)
 		/* Insertion debounce set to 48ms */
 		WCD_MBHC_REG_UPDATE_BITS(WCD_MBHC_INSREM_DBNC, 4);
 	} else {
-	        //fihtdc, 20180517 Dennis, add for customized debounce
-	        if(mbhc->mbhc_cfg->fih_debounce == 0)
-			mbhc->mbhc_cfg->fih_debounce = 6;
-		WCD_MBHC_REG_UPDATE_BITS(WCD_MBHC_INSREM_DBNC, mbhc->mbhc_cfg->fih_debounce);
+		/* Insertion debounce set to 96ms */
+		WCD_MBHC_REG_UPDATE_BITS(WCD_MBHC_INSREM_DBNC, 6);
 	}
 
 	/* Button Debounce set to 16ms */
@@ -2733,7 +2721,6 @@ int wcd_mbhc_start(struct wcd_mbhc *mbhc, struct wcd_mbhc_config *mbhc_cfg)
 	struct snd_soc_codec *codec;
 	struct snd_soc_card *card;
 	const char *usb_c_dt = "qcom,msm-mbhc-usbc-audio-supported";
-	const char *customized_debounce_dt = "fih,fih-mbhc-customized-debounce-supported";
 
 	if (!mbhc || !mbhc_cfg)
 		return -EINVAL;
@@ -2753,20 +2740,12 @@ int wcd_mbhc_start(struct wcd_mbhc *mbhc, struct wcd_mbhc_config *mbhc_cfg)
 		rc = of_property_read_u32(card->dev->of_node, usb_c_dt,
 				&mbhc_cfg->enable_usbc_analog);
 	}
-
 	if (mbhc_cfg->enable_usbc_analog == 0 || rc != 0) {
 		dev_info(card->dev,
 				"%s: %s in dt node is missing or false\n",
 				__func__, usb_c_dt);
 		dev_info(card->dev,
 			"%s: skipping USB c analog configuration\n", __func__);
-	}
-
-	// fih, 20180517 Dennis, check if use customized debounce on device tree
-	mbhc_cfg->fih_debounce = 0;
-	if (of_find_property(card->dev->of_node, customized_debounce_dt, NULL)) {
-		rc = of_property_read_u32(card->dev->of_node, customized_debounce_dt,
-				&mbhc_cfg->fih_debounce);
 	}
 
 	/* initialize GPIOs */
@@ -2824,44 +2803,6 @@ int wcd_mbhc_start(struct wcd_mbhc *mbhc, struct wcd_mbhc_config *mbhc_cfg)
 			pr_err("%s: Skipping to read mbhc fw, 0x%pK %pK\n",
 				 __func__, mbhc->mbhc_fw, mbhc->mbhc_cal);
 	}
-//Add switch device for FTM request FAO-4
-#ifdef LEGACY_SWITCH_DEV_SUPPORT
-	/*Modify this function for MCS-4331 kernel_panic issue*/
-	if(!mbhc->mbhc_cfg->fih_hs_support)
-	{
-		int ret;
-		if (!fih_hs){
-			pr_info("%s: kzalloc fih_hs\n", __func__);
-			fih_hs = kzalloc(sizeof(struct h2w_info), GFP_KERNEL);
-			if (!fih_hs)
-				return -ENOMEM;
-			// /sys/class/switch/h2w/state to be updated.
-			// /sys/class/switch/h2w/btn_state to be updated.
-			atomic_set(&fih_hs->btn_state, 0);
-			atomic_set(&fih_hs->hs_state, 0);
-			fih_hs->sdev.name = "h2w";
-			fih_hs->sdev.print_name = trout_h2w_print_name;
-			ret = switch_dev_register(&fih_hs->sdev);
-			if (!ret){
-				ret = device_create_file(fih_hs->sdev.dev,&dev_attr_btn_state);
-				if(ret)
-				{
-					pr_err("%s: device_create_file btn_state fail %d!\n", __func__, ret);
-					switch_dev_unregister(&fih_hs->sdev);
-					kzfree(fih_hs);
-				}
-			}
-			else	{
-				pr_err("%s: switch_dev_register (%s) fail %d\n", __func__, fih_hs->sdev.name, ret);
-				kzfree(fih_hs);
-			}
-		}
-		else	{
-			pr_err("%s: fih_hs already exist with name(%s)\n", __func__, fih_hs->sdev.name);
-		}
-	}
-#endif
-	pr_debug("%s: leave %d\n", __func__, rc);
 
 	return rc;
 err:
@@ -3009,7 +2950,11 @@ int wcd_mbhc_init(struct wcd_mbhc *mbhc, struct snd_soc_codec *codec,
 	mbhc->is_extn_cable = false;
 	mbhc->hph_type = WCD_MBHC_HPH_NONE;
 	mbhc->wcd_mbhc_regs = wcd_mbhc_regs;
-
+/* MODIFIED-BEGIN by hongwei.tian, 2018-01-10,BUG-5867922*/
+#ifdef CONFIG_TCT_SDM660_COMMON
+	hph_in_detecting = 0;
+#endif
+/* MODIFIED-END by hongwei.tian,BUG-5867922*/
 	if (mbhc->intr_ids == NULL) {
 		pr_err("%s: Interrupt mapping not provided\n", __func__);
 		return -EINVAL;
@@ -3056,6 +3001,9 @@ int wcd_mbhc_init(struct wcd_mbhc *mbhc, struct snd_soc_codec *codec,
 				__func__);
 			return ret;
 		}
+
+		set_bit(INPUT_PROP_NO_DUMMY_RELEASE,
+			mbhc->button_jack.jack->input_dev->propbit);
 
 		INIT_DELAYED_WORK(&mbhc->mbhc_firmware_dwork,
 				  wcd_mbhc_fw_read);

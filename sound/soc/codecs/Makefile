@@ -215,6 +215,11 @@ snd-soc-max9877-objs := max9877.o
 snd-soc-tpa6130a2-objs := tpa6130a2.o
 snd-soc-tas2552-objs := tas2552.o
 
+snd-soc-tfa9911-objs := tfa9911/tfa98xx.o tfa9911/tfa_container.o tfa9911/tfa_dsp.o tfa9911/tfa9890_init.o tfa9911/tfa9888_init.o tfa9911/tfa9891_init.o tfa9911/tfa9897_init.o tfa9911/tfa9887B_init.o tfa9911/tfa9887_init.o tfa9911/tfa_mmi_test.o
+snd-soc-ak4376-objs := akm/ak4376.o
+
+snd-soc-aw87319-objs := aw87319_audio_m.o
+
 obj-$(CONFIG_SND_SOC_88PM860X)	+= snd-soc-88pm860x.o
 obj-$(CONFIG_SND_SOC_AB8500_CODEC)	+= snd-soc-ab8500-codec.o
 obj-$(CONFIG_SND_SOC_AC97_CODEC)	+= snd-soc-ac97.o
@@ -428,13 +433,8 @@ obj-$(CONFIG_SND_SOC_TPA6130A2)	+= snd-soc-tpa6130a2.o
 obj-y += sdm660_cdc/
 obj-y += msm_sdw/
 
-# SmartAmp
-obj-$(CONFIG_SND_SOC_TAS2557)	+= tas2557/
-obj-$(CONFIG_SND_SOC_TFA9891)	+= tfa9891/
-#rita add
-obj-$(CONFIG_SND_SOC_TAS2560)	+= tas2560/
+obj-$(CONFIG_SND_SOC_TFA9911)  += snd-soc-tfa9911.o
 
+obj-$(CONFIG_SND_SOC_AK4376) += snd-soc-ak4376.o
 
-# TODO: remove me b/62058353
-subdir-ccflags-y += \
-	-Wno-enum-conversion
+obj-$(CONFIG_SND_SOC_AW87319)	+= snd-soc-aw87319.o

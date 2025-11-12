@@ -199,7 +199,7 @@ static void populate_codec_list(struct msm_transcode_loopback *trans,
 static int msm_transcode_map_ion_fd(struct msm_transcode_loopback *trans,
 				    int fd)
 {
-	ion_phys_addr_t paddr = 0;
+	ion_phys_addr_t paddr;
 	size_t pa_len = 0;
 	int ret = 0;
 
@@ -229,7 +229,7 @@ done:
 
 static int msm_transcode_unmap_ion_fd(struct msm_transcode_loopback *trans)
 {
-	ion_phys_addr_t paddr = 0;
+	ion_phys_addr_t paddr;
 	size_t pa_len = 0;
 	int ret = 0;
 
@@ -359,7 +359,7 @@ static int msm_transcode_loopback_free(struct snd_compr_stream *cstream)
 	struct trans_loopback_pdata *pdata = snd_soc_platform_get_drvdata(
 								rtd->platform);
 	int ret = 0;
-	ion_phys_addr_t paddr = 0;
+	ion_phys_addr_t paddr;
 	size_t pa_len = 0;
 
 	mutex_lock(&trans->lock);
@@ -692,8 +692,9 @@ static int msm_transcode_stream_cmd_put(struct snd_kcontrol *kcontrol,
 		goto done;
 	}
 
-	if (event_data->payload_len > sizeof(ucontrol->value.bytes.data)
-		- sizeof(struct msm_adsp_event_data)) {
+
+	if ((sizeof(struct msm_adsp_event_data) + event_data->payload_len) >=
+					sizeof(ucontrol->value.bytes.data)) {
 		pr_err("%s param length=%d  exceeds limit",
 			 __func__, event_data->payload_len);
 		ret = -EINVAL;
