@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2018, 2020, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -231,6 +231,8 @@ static inline void msm_pm_qos_add_request(void)
 static void msm_pm_qos_remove_request(void)
 {
 	pr_info("%s: remove request", __func__);
+	if (!atomic_cmpxchg(&qos_add_request_done, 1, 0))
+		return;
 	pm_qos_remove_request(&msm_v4l2_pm_qos_request);
 }
 
@@ -238,8 +240,7 @@ void msm_pm_qos_update_request(int val)
 {
 	pr_info("%s: update request %d", __func__, val);
 	msm_pm_qos_add_request();
-	if (pm_qos_request_active(&msm_v4l2_pm_qos_request))
-		pm_qos_update_request(&msm_v4l2_pm_qos_request, val);
+	pm_qos_update_request(&msm_v4l2_pm_qos_request, val);
 }
 
 struct msm_session *msm_session_find(unsigned int session_id)
@@ -623,7 +624,7 @@ static inline int __msm_remove_session_cmd_ack_q(void *d1, void *d2)
 {
 	struct msm_command_ack *cmd_ack = d1;
 
-	if (!(&cmd_ack->command_q))
+	if (&cmd_ack->command_q == NULL)
 		return 0;
 
 	msm_queue_drain(&cmd_ack->command_q, struct msm_command, list);
@@ -633,7 +634,7 @@ static inline int __msm_remove_session_cmd_ack_q(void *d1, void *d2)
 
 static void msm_remove_session_cmd_ack_q(struct msm_session *session)
 {
-	if ((!session) || !(&session->command_ack_q))
+	if ((!session) || (&session->command_ack_q == NULL))
 		return;
 
 	mutex_lock(&session->lock);
@@ -1313,10 +1314,7 @@ static const struct file_operations logsync_fops = {
 static int msm_probe(struct platform_device *pdev)
 {
 	struct msm_video_device *pvdev = NULL;
-#if 0//QC 03210652: just create a file and not writing anything. to disable it ++
-//junit.framework.AssertionFailedError: Found writable: [/sys/kernel/debug/camera/logsync]
 	static struct dentry *cam_debugfs_root;
-#endif //QC 03210652 --
 	int rc = 0;
 
 	msm_v4l2_dev = kzalloc(sizeof(*msm_v4l2_dev),
@@ -1354,8 +1352,8 @@ static int msm_probe(struct platform_device *pdev)
 	if (WARN_ON(rc < 0))
 		goto media_fail;
 
-	rc = media_entity_init(&pvdev->vdev->entity, 0, NULL, 0);
-	if (WARN_ON(rc < 0))
+	if (WARN_ON((rc == media_entity_init(&pvdev->vdev->entity,
+			0, NULL, 0)) < 0))
 		goto entity_fail;
 
 	pvdev->vdev->entity.type = MEDIA_ENT_T_DEVNODE_V4L;
@@ -1400,8 +1398,6 @@ static int msm_probe(struct platform_device *pdev)
 	mutex_init(&v4l2_event_mtx);
 	INIT_LIST_HEAD(&ordered_sd_list);
 
-#if 0//QC 03210652: just create a file and not writing anything. to disable it ++
-//junit.framework.AssertionFailedError: Found writable: [/sys/kernel/debug/camera/logsync]
 	cam_debugfs_root = debugfs_create_dir(MSM_CAM_LOGSYNC_FILE_BASEDIR,
 						NULL);
 	if (!cam_debugfs_root) {
@@ -1414,7 +1410,7 @@ static int msm_probe(struct platform_device *pdev)
 					 &logsync_fops))
 			pr_warn("NON-FATAL: failed to create logsync debugfs file\n");
 	}
-#endif //QC 03210652 --
+
 	rc = cam_ahb_clk_init(pdev);
 	if (rc < 0) {
 		pr_err("%s: failed to register ahb clocks\n", __func__);

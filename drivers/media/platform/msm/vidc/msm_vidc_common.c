@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2018, 2020, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -714,11 +714,12 @@ static void handle_sys_init_done(enum hal_command_response cmd, void *data)
 
 static void put_inst_helper(struct kref *kref)
 {
-	struct msm_vidc_inst *inst = container_of(kref, struct msm_vidc_inst,
-			kref);
+	struct msm_vidc_inst *inst = container_of(kref,
+					struct msm_vidc_inst, kref);
 
 	msm_vidc_destroy(inst);
 }
+
 
 static void put_inst(struct msm_vidc_inst *inst)
 {
@@ -2631,7 +2632,7 @@ err_sess_abort:
 	return;
 }
 
-void msm_comm_handle_thermal_event()
+void msm_comm_handle_thermal_event(void)
 {
 	struct msm_vidc_core *core;
 
@@ -3858,20 +3859,17 @@ int msm_comm_qbuf(struct msm_vidc_inst *inst, struct vb2_buffer *vb)
 	 * Don't queue if:
 	 * 1) Hardware isn't ready (that's simple)
 	 */
-	if (!defer)
-		defer = inst->state != MSM_VIDC_START_DONE;
+	defer = defer ?: inst->state != MSM_VIDC_START_DONE;
 
 	/*
 	 * 2) The client explicitly tells us not to because it wants this
 	 * buffer to be batched with future frames.  The batch size (on both
 	 * capabilities) is completely determined by the client.
 	 */
-	if (!defer)
-		defer = vbuf && vbuf->flags & V4L2_MSM_BUF_FLAG_DEFER;
+	defer = defer ?: vbuf && vbuf->flags & V4L2_MSM_BUF_FLAG_DEFER;
 
 	/* 3) If we're in batch mode, we must have full batches of both types */
-	if (!defer)
-		defer = batch_mode && (!output_count || !capture_count);
+	defer = defer ?: batch_mode && (!output_count || !capture_count);
 
 	if (defer) {
 		dprintk(VIDC_DBG, "Deferring queue of %pK\n", vb);

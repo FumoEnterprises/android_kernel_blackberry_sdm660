@@ -1,6 +1,4 @@
-ifneq ($(cc-name),clang)
 GCC_VERSION      := $(shell $(CONFIG_SHELL) $(srctree)/scripts/gcc-version.sh $(CROSS_COMPILE)gcc)
-endif
 
 ccflags-y += -Idrivers/media/platform/msm/camera_v2/jpeg_10
 ccflags-y += -Idrivers/media/platform/msm/camera_v2/sensor/io
