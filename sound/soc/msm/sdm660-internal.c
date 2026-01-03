@@ -1327,6 +1327,7 @@ static void *def_msm_int_wcd_mbhc_cal(void)
 
 	return msm_int_wcd_cal;
 }
+extern int config_hph_switch_gpio(struct snd_soc_codec *codec, int enable); // MODIFIED by hongwei.tian, 2018-05-14,BUG-6295864
 
 static int msm_audrx_init(struct snd_soc_pcm_runtime *rtd)
 {
@@ -1374,9 +1375,13 @@ static int msm_audrx_init(struct snd_soc_pcm_runtime *rtd)
 	snd_soc_dapm_ignore_suspend(dapm, "DMIC2");
 	snd_soc_dapm_ignore_suspend(dapm, "DMIC3");
 	snd_soc_dapm_ignore_suspend(dapm, "DMIC4");
+	snd_soc_dapm_ignore_suspend(dapm, "Ext Spk"); // MODIFIED by hongwei.tian, 2018-05-08,BUG-6293783
 
 	snd_soc_dapm_sync(dapm);
 
+	if (gpio_is_valid(pdata->hph_ext_pa_gpio) ||  (pdata->hph_ext_pa_gpio_p)) {
+		msm_anlg_cdc_hph_ext_switch_cb(config_hph_switch_gpio, ana_cdc);
+	}
 	msm_anlg_cdc_spk_ext_pa_cb(enable_spk_ext_pa, ana_cdc);
 	msm_dig_cdc_hph_comp_cb(msm_config_hph_compander_gpio, dig_cdc);
 

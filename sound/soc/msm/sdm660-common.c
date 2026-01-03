@@ -2808,12 +2808,13 @@ static bool msm_swap_hph_switch_reset(struct snd_soc_codec *codec,bool status)
 	struct msm_asoc_mach_data *pdata = snd_soc_card_get_drvdata(card);
 
 	/* MODIFIED-BEGIN by hongwei.tian, 2018-01-10,BUG-5867922*/
-	printk(KERN_ERR"msm_swap_hph_switch_status reset: curr = %d  \n", g_hph_src_state);
-	printk(KERN_ERR"msm_swap_hph_switch_status reset: status = %d  \n", status);
+	pr_debug("msm_swap_hph_switch_status reset: curr = %d  \n", g_hph_src_state);
+	pr_debug("msm_swap_hph_switch_status reset: status = %d  \n", status);
 	/* MODIFIED-END by hongwei.tian,BUG-5867922*/
 	if(!status && g_hph_src_state == 1 )
 	{
-		ret = msm_cdc_pinctrl_select_sleep_state(
+		if (pdata->hph_switch_gpio_p)
+			ret = msm_cdc_pinctrl_select_sleep_state(
 					pdata->hph_switch_gpio_p);
 		if (ret) {
 			pr_err("%s: gpio set cannot be de-activated %s\n",
@@ -2822,7 +2823,8 @@ static bool msm_swap_hph_switch_reset(struct snd_soc_codec *codec,bool status)
 	}
 	else if(status)
 	{
-		ret = msm_cdc_pinctrl_select_active_state(
+		if (pdata->hph_switch_gpio_p)
+			ret = msm_cdc_pinctrl_select_active_state(
 						pdata->hph_switch_gpio_p);
 		if (ret) {
 			pr_err("%s: gpio set cannot be activated %s\n",
@@ -2840,9 +2842,12 @@ void msm_swap_hph_switch_status(struct snd_soc_codec *codec)
 	struct snd_soc_card *card = codec->component.card;
 	struct msm_asoc_mach_data *pdata = snd_soc_card_get_drvdata(card);
 
-	printk(KERN_ERR"msm_swap_hph_switch_status: curr = %d  \n", g_hph_src_state);
-	gpio_status = msm_cdc_pinctrl_get_state(pdata->hph_switch_gpio_p);
-	printk(KERN_ERR"msm_swap_hph_switch_status: gpio_status = %d  \n", gpio_status);
+	if(pdata->hph_switch_gpio_p)
+	{
+		printk(KERN_ERR"msm_swap_hph_switch_status: curr = %d  \n", g_hph_src_state);
+		gpio_status = msm_cdc_pinctrl_get_state(pdata->hph_switch_gpio_p);
+		printk(KERN_ERR"msm_swap_hph_switch_status: gpio_status = %d  \n", gpio_status);
+	}
 }
 /* MODIFIED-END by hongwei.tian,BUG-5867922*/
 
@@ -3258,7 +3263,7 @@ static const struct of_device_id sdm660_asoc_machine_of_match[]  = {
 	{},
 };
 /* MODIFIED-BEGIN by hongwei.tian, 2018-01-08,BUG-5860103*/
-static int config_hph_switch_gpio(struct snd_soc_codec *codec, int enable);
+int config_hph_switch_gpio(struct snd_soc_codec *codec, int enable);
 
 int is_hph_switch_gpio_support(struct platform_device *pdev,
 			struct msm_asoc_mach_data *pdata)
@@ -3292,7 +3297,7 @@ int is_hph_switch_gpio_support(struct platform_device *pdev,
 			gpio_set_value_cansleep(pdata->hph_ext_pa_gpio, 0);
 		}
 		if (pdata->hph_ext_pa_gpio_p) {
-		ret = msm_cdc_pinctrl_select_sleep_state(
+		ret = msm_cdc_pinctrl_select_active_state(
 					pdata->hph_ext_pa_gpio_p);
 		if (ret) {
 			pr_err("%s: gpio set cannot be de-activated %s\n",
@@ -3306,7 +3311,7 @@ int is_hph_switch_gpio_support(struct platform_device *pdev,
 	return 0;
 }
 
-static int config_hph_switch_gpio(struct snd_soc_codec *codec, int enable)
+int config_hph_switch_gpio(struct snd_soc_codec *codec, int enable) // MODIFIED by hongwei.tian, 2018-05-14,BUG-6295864
 {
 	struct snd_soc_card *card = codec->component.card;
 	struct msm_asoc_mach_data *pdata = snd_soc_card_get_drvdata(card);
@@ -3326,6 +3331,8 @@ static int config_hph_switch_gpio(struct snd_soc_codec *codec, int enable)
 			gpio_set_value_cansleep(pdata->hph_ext_pa_gpio, 0);
 		}
 	}else if (pdata->hph_ext_pa_gpio_p) {
+		value = msm_cdc_pinctrl_get_state(pdata->hph_ext_pa_gpio_p);
+		pr_err("%s: HPH_gpio : %d  switch to %d \n", __func__, value ,enable);
 
 		if (enable) {
 			ret = msm_cdc_pinctrl_select_active_state(
