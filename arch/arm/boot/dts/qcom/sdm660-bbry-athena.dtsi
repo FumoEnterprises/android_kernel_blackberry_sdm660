@@ -432,18 +432,6 @@
 	/delete-property/ qcom,platform-reset-gpio;
 };
 
-&mdss_dsi1 {
-	/* On Athena, The touch driver controls vregs and gpios */
-	///delete-property/ vdda-3p3-supply;
-	///delete-property/ wqhd-vddio-supply;
-	///delete-property/ lab-supply;
-	///delete-property/ ibb-supply;
-
-	///delete-property/ qcom,platform-enable-gpio;
-	///delete-property/ qcom,5v-boost-gpio;
-	///delete-property/ qcom,platform-bklight-en-gpio;
-	///delete-property/ qcom,platform-reset-gpio;
-};
 /* MODIFIED-END by Haojun Chen,BUG-5162384*/
 
 &pm660l_wled {
