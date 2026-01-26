@@ -38,17 +38,17 @@
 #define NCI_IDENTIFIER			(0x10)
 
 enum nfcc_initial_core_reset_ntf {
-	TIMEDOUT_INITIAL_CORE_RESET_NTF = 0, /* 0*/
-	ARRIVED_INITIAL_CORE_RESET_NTF, /* 1 */
-	DEFAULT_INITIAL_CORE_RESET_NTF, /*2*/
+    TIMEDOUT_INITIAL_CORE_RESET_NTF = 0, /* 0*/
+    ARRIVED_INITIAL_CORE_RESET_NTF, /* 1 */
+    DEFAULT_INITIAL_CORE_RESET_NTF, /*2*/
 };
 
 enum nfcc_chip_variant {
-	NFCC_NQ_210			= 0x48,	/**< NFCC NQ210 */
-	NFCC_NQ_220			= 0x58,	/**< NFCC NQ220 */
-	NFCC_NQ_310			= 0x40,	/**< NFCC NQ310 */
-	NFCC_NQ_330			= 0x51,	/**< NFCC NQ330 */
-	NFCC_PN66T			= 0x18,	/**< NFCC PN66T */
-	NFCC_NOT_SUPPORTED	        = 0xFF	/**< NFCC is not supported */
+    NFCC_NQ_210			= 0x48,	/**< NFCC NQ210 */
+    NFCC_NQ_220			= 0x58,	/**< NFCC NQ220 */
+    NFCC_NQ_310			= 0x40,	/**< NFCC NQ310 */
+    NFCC_NQ_330			= 0x51,	/**< NFCC NQ330 */
+    NFCC_PN66T			= 0x18,	/**< NFCC PN66T */
+    NFCC_NOT_SUPPORTED	        = 0xFF	/**< NFCC is not supported */
 };
 #endif
