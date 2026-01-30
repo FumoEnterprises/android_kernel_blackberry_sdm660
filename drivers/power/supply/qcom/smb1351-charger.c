@@ -481,6 +481,10 @@ struct smb1351_charger {
 
 	struct smb1351_regulator	otg_vreg;
 	struct mutex		irq_complete;
+#if defined(CONFIG_TCT_SDM660_COMMON)
+	struct mutex		parallel_config_lock;
+	struct mutex		fcc_lock;
+#endif
 
 	struct dentry		*debug_root;
 	u32			peek_poke_address;
@@ -693,13 +697,82 @@ static int smb1351_battchg_disable(struct smb1351_charger *chip,
 	return rc;
 }
 
+#if defined(CONFIG_TCT_SDM660_COMMON)
 static int smb1351_fastchg_current_set(struct smb1351_charger *chip,
 					unsigned int fastchg_current)
 {
 	int i, rc;
 	bool is_pre_chg = false;
 
+	mutex_lock(&chip->fcc_lock);
+	if ((fastchg_current < SMB1351_CHG_PRE_MIN_MA) ||
+		(fastchg_current > SMB1351_CHG_FAST_MAX_MA)) {
+		pr_err("bad pre_fastchg current mA=%d asked to set\n",
+					fastchg_current);
+		mutex_unlock(&chip->fcc_lock);
+		return -EINVAL;
+	}
 
+	pr_debug("set fastchg current mA=%d\n", fastchg_current);
+	if (fastchg_current < SMB1351_CHG_FAST_MIN_MA) {
+		is_pre_chg = true;
+		pr_debug("is_pre_chg true, current is %d\n", fastchg_current);
+	}
+	if (is_pre_chg) {
+		for (i = ARRAY_SIZE(pre_chg_current) - 1; i >= 0; i--) {
+			if (pre_chg_current[i] <= fastchg_current)
+				break;
+		}
+		if (i < 0)
+			i = 0;
+		chip->fastchg_current_max_ma = pre_chg_current[i];
+		pr_debug("prechg setting %02x\n", i);
+		i = i << SMB1351_CHG_PRE_SHIFT;
+		rc = smb1351_masked_write(chip, CHG_OTH_CURRENT_CTRL_REG,
+				PRECHG_CURRENT_MASK, i);
+		if (rc)
+			pr_err("Couldn't write CHG_OTH_CURRENT_CTRL_REG rc=%d\n",
+									rc);
+		rc = smb1351_masked_write(chip, VARIOUS_FUNC_2_REG,
+				PRECHG_TO_FASTCHG_BIT, PRECHG_TO_FASTCHG_BIT);
+		if (rc)
+			pr_err("Write VARIOUS_FUNC_2_REG failed, rc=%d\n", rc);
+	} else {
+		if (chip->version == SMB_UNKNOWN) {
+			rc = -EINVAL;
+			goto done;
+		}
+		if (chip->version == SMB1350 && fastchg_current > 2600)
+			fastchg_current = 2600;
+		for (i = ARRAY_SIZE(fast_chg_current) - 1; i >= 0; i--) {
+			if (fast_chg_current[i] <= fastchg_current)
+				break;
+		}
+		if (i < 0)
+			i = 0;
+		chip->fastchg_current_max_ma = fast_chg_current[i];
+		i = i << SMB1351_CHG_FAST_SHIFT;
+		pr_debug("fastchg limit=%d setting %02x\n",
+					chip->fastchg_current_max_ma, i);
+		rc = smb1351_masked_write(chip, VARIOUS_FUNC_2_REG,
+					PRECHG_TO_FASTCHG_BIT, 0);
+		if (rc)
+			pr_err("Couldn't write VARIOUS_FUNC_2_REG rc=%d\n", rc);
+		rc = smb1351_masked_write(chip, CHG_CURRENT_CTRL_REG,
+					FAST_CHG_CURRENT_MASK, i);
+		if (rc)
+			pr_err("Write CURRENT_CTRL_REG failed, rc=%d\n", rc);
+	}
+done:
+	mutex_unlock(&chip->fcc_lock);
+	return rc;
+}
+#else
+static int smb1351_fastchg_current_set(struct smb1351_charger *chip,
+					unsigned int fastchg_current)
+{
+	int i, rc;
+	bool is_pre_chg = false;
 	if ((fastchg_current < SMB1351_CHG_PRE_MIN_MA) ||
 		(fastchg_current > SMB1351_CHG_FAST_MAX_MA)) {
 		pr_err("bad pre_fastchg current mA=%d asked to set\n",
@@ -768,6 +841,7 @@ static int smb1351_fastchg_current_set(struct smb1351_charger *chip,
 					FAST_CHG_CURRENT_MASK, i);
 	}
 }
+#endif
 
 #define MIN_FLOAT_MV		3500
 #define MAX_FLOAT_MV		4500
@@ -1417,7 +1491,6 @@ static enum power_supply_property smb1351_parallel_properties[] = {
 	POWER_SUPPLY_PROP_CHARGE_TYPE,
 	POWER_SUPPLY_PROP_PARALLEL_MODE,
 	POWER_SUPPLY_PROP_INPUT_SUSPEND,
-	POWER_SUPPLY_PROP_MODEL_NAME,
 };
 
 static int smb1351_parallel_set_chg_suspend(struct smb1351_charger *chip,
@@ -1432,6 +1505,10 @@ static int smb1351_parallel_set_chg_suspend(struct smb1351_charger *chip,
 		return 0;
 	}
 
+#if defined(CONFIG_TCT_SDM660_COMMON)
+	chip->parallel_charger_suspended = suspend;
+#endif
+
 	if (!suspend) {
 		rc = smb_chip_get_version(chip);
 		if (rc) {
@@ -1444,6 +1521,15 @@ static int smb1351_parallel_set_chg_suspend(struct smb1351_charger *chip,
 			pr_err("Couldn't configure for volatile rc = %d\n", rc);
 			return rc;
 		}
+
+#if defined(CONFIG_TCT_SDM660_COMMON)
+		rc = smb1351_masked_write(chip, PON_OPTIONS_REG,
+			INPUT_MISSING_POLLER_CONFIG_BIT, INPUT_MISSING_POLLER_CONFIG_BIT);
+		if (rc) {
+			pr_err("Couldn't set 0x13[3] to 1, rc = %d\n", rc);
+			return rc;
+		}
+#endif
 
 		/* set the float voltage */
 		if (chip->vfloat_mv != -EINVAL) {
@@ -1521,14 +1607,19 @@ static int smb1351_parallel_set_chg_suspend(struct smb1351_charger *chip,
 			pr_err("Couldn't set fastchg current rc=%d\n", rc);
 			return rc;
 		}
+#if !defined(CONFIG_TCT_SDM660_COMMON)
 		chip->parallel_charger_suspended = false;
-	} else {
+#endif
+	}
+	else {
 		rc = smb1351_usb_suspend(chip, CURRENT, true);
 		if (rc)
 			pr_debug("failed to suspend rc=%d\n", rc);
 
 		chip->usb_psy_ma = SUSPEND_CURRENT_MA;
+#if !defined(CONFIG_TCT_SDM660_COMMON)
 		chip->parallel_charger_suspended = true;
+#endif
 	}
 
 	return 0;
@@ -1601,6 +1692,11 @@ static int smb1351_parallel_set_property(struct power_supply *psy,
 	int rc = 0, index, current_ma;
 	struct smb1351_charger *chip = power_supply_get_drvdata(psy);
 
+#if defined(CONFIG_TCT_SDM660_COMMON)
+	if(!psy || !val)
+		return -EINVAL;
+#endif
+
 	switch (prop) {
 	case POWER_SUPPLY_PROP_CHARGING_ENABLED:
 		/*
@@ -1611,7 +1707,13 @@ static int smb1351_parallel_set_property(struct power_supply *psy,
 			rc = smb1351_usb_suspend(chip, USER, !val->intval);
 		break;
 	case POWER_SUPPLY_PROP_INPUT_SUSPEND:
+#if defined(CONFIG_TCT_SDM660_COMMON)
+		mutex_lock(&chip->parallel_config_lock);
+#endif
 		rc = smb1351_parallel_set_chg_suspend(chip, val->intval);
+#if defined(CONFIG_TCT_SDM660_COMMON)
+		mutex_unlock(&chip->parallel_config_lock);
+#endif
 		break;
 	case POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT_MAX:
 		chip->target_fastchg_current_max_ma =
@@ -1659,6 +1761,11 @@ static int smb1351_parallel_get_property(struct power_supply *psy,
 				       union power_supply_propval *val)
 {
 	struct smb1351_charger *chip = power_supply_get_drvdata(psy);
+
+#if defined(CONFIG_TCT_SDM660_COMMON)
+	if(!psy || !val)
+		return -ENODEV;
+#endif
 
 	switch (prop) {
 	case POWER_SUPPLY_PROP_CHARGING_ENABLED:
@@ -1711,9 +1818,6 @@ static int smb1351_parallel_get_property(struct power_supply *psy,
 		break;
 	case POWER_SUPPLY_PROP_INPUT_SUSPEND:
 		val->intval = chip->parallel_charger_suspended;
-		break;
-	case POWER_SUPPLY_PROP_MODEL_NAME:
-		val->strval = "smb1351";
 		break;
 	default:
 		return -EINVAL;
@@ -3237,6 +3341,11 @@ static int smb1351_parallel_charger_probe(struct i2c_client *client,
 	chip->resume_completed = true;
 	mutex_init(&chip->irq_complete);
 
+#if defined(CONFIG_TCT_SDM660_COMMON)
+	mutex_init(&chip->parallel_config_lock);
+	mutex_init(&chip->fcc_lock);
+#endif
+
 	create_debugfs_entries(chip);
 
 	pr_info("smb1351 parallel successfully probed.\n");
@@ -3262,14 +3371,6 @@ static int smb1351_charger_remove(struct i2c_client *client)
 	mutex_destroy(&chip->irq_complete);
 	debugfs_remove_recursive(chip->debug_root);
 	return 0;
-}
-
-static void smb1351_charger_shutdown(struct i2c_client *client)
-{
-	struct smb1351_charger *chip = i2c_get_clientdata(client);
-
-	if (!chip->parallel_charger_suspended)
-		smb1351_usb_suspend(chip, USER, true);
 }
 
 static int smb1351_suspend(struct device *dev)
@@ -3351,7 +3452,6 @@ static struct i2c_driver smb1351_charger_driver = {
 	},
 	.probe		= smb1351_charger_probe,
 	.remove		= smb1351_charger_remove,
-	.shutdown	= smb1351_charger_shutdown,
 	.id_table	= smb1351_charger_id,
 };
 

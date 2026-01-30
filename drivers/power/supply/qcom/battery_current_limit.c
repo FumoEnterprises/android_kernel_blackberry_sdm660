@@ -294,18 +294,6 @@ static int get_and_evaluate_battery_soc(void)
 	union power_supply_propval ret = {0,};
 	int battery_percentage;
 	enum bcl_threshold_state prev_soc_state;
-	static struct power_supply *usb_psy;
-	int usb_state;
-	bool is_usb_present;
-
-	if (!usb_psy)
-		usb_psy = power_supply_get_by_name("usb");
-	if (usb_psy) {
-		usb_state = power_supply_get_property(usb_psy,
-				POWER_SUPPLY_PROP_PRESENT, &ret);
-		if (usb_state == 0)
-			is_usb_present = ret.intval;
-	}
 
 	if (!batt_psy)
 		batt_psy = power_supply_get_by_name("battery");
@@ -452,8 +440,7 @@ static void bcl_iavail_work(struct work_struct *work)
 	if (gbcl->bcl_mode == BCL_DEVICE_ENABLED) {
 		bcl_calculate_iavail_trigger();
 		/* restart the delay work for caculating imax */
-		queue_delayed_work(system_power_efficient_wq,
-                        &bcl->bcl_iavail_work,
+		schedule_delayed_work(&bcl->bcl_iavail_work,
 			msecs_to_jiffies(bcl->bcl_poll_interval_msec));
 	}
 }
@@ -825,8 +812,7 @@ static void bcl_mode_set(enum bcl_device_mode mode)
 	switch (gbcl->bcl_monitor_type) {
 	case BCL_IAVAIL_MONITOR_TYPE:
 		if (mode == BCL_DEVICE_ENABLED)
-			queue_delayed_work(system_power_efficient_wq,
-                                &gbcl->bcl_iavail_work, 0);
+			schedule_delayed_work(&gbcl->bcl_iavail_work, 0);
 		else
 			cancel_delayed_work_sync(&(gbcl->bcl_iavail_work));
 		break;

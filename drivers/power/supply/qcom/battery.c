@@ -1,4 +1,4 @@
-/* Copyright (c) 2017,2019 The Linux Foundation. All rights reserved.
+/* Copyright (c) 2017 The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -10,7 +10,11 @@
  * GNU General Public License for more details.
  */
 
+#if defined(CONFIG_TCT_SDM660_COMMON)
+#define pr_fmt(fmt) "[BATT]: %s(): " fmt, __func__
+#else
 #define pr_fmt(fmt) "QCOM-BATT: %s: " fmt, __func__
+#endif
 
 #include <linux/device.h>
 #include <linux/delay.h>
@@ -27,6 +31,10 @@
 #include <linux/slab.h>
 #include <linux/pmic-voter.h>
 
+#if defined(CONFIG_TCT_SDM660_COMMON)
+#include <battery.h>
+#endif
+
 #define DRV_MAJOR_VERSION	1
 #define DRV_MINOR_VERSION	0
 
@@ -40,28 +48,34 @@
 #define ICL_CHANGE_VOTER		"ICL_CHANGE_VOTER"
 #define PL_INDIRECT_VOTER		"PL_INDIRECT_VOTER"
 #define USBIN_I_VOTER			"USBIN_I_VOTER"
-#define FCC_STEPPER_VOTER		"FCC_STEPPER_VOTER"
+
+#if defined(CONFIG_TCT_SDM660_COMMON)
+#define BATT_V_VOTER			"BATT_V_VOTER"
+#endif
 
 struct pl_data {
 	int			pl_mode;
 	int			slave_pct;
 	int			taper_pct;
 	int			slave_fcc_ua;
-	int			main_fcc_ua;
 	int			restricted_current;
 	bool			restricted_charging_enabled;
 	struct votable		*fcc_votable;
 	struct votable		*fv_votable;
 	struct votable		*pl_disable_votable;
+
+#if !defined(CONFIG_TCT_SDM660_COMMON)
 	struct votable		*pl_awake_votable;
+#endif
+
 	struct votable		*hvdcp_hw_inov_dis_votable;
 	struct votable		*usb_icl_votable;
 	struct votable		*pl_enable_votable_indirect;
 	struct delayed_work	status_change_work;
 	struct work_struct	pl_disable_forever_work;
+#if !defined(CONFIG_TCT_SDM660_COMMON)
 	struct delayed_work	pl_taper_work;
-	struct delayed_work	pl_awake_work;
-	struct delayed_work	fcc_step_update_work;
+#endif
 	struct power_supply	*main_psy;
 	struct power_supply	*pl_psy;
 	struct power_supply	*batt_psy;
@@ -69,16 +83,15 @@ struct pl_data {
 	int			charge_type;
 	int			total_settled_ua;
 	int			pl_settled_ua;
-	int			fcc_step_update;
-	int			main_step_fcc_dir;
-	int			main_step_fcc_count;
-	int			main_step_fcc_residual;
-	int			parallel_step_fcc_dir;
-	int			parallel_step_fcc_count;
-	int			parallel_step_fcc_residual;
 	struct class		qcom_batt_class;
 	struct wakeup_source	*pl_ws;
 	struct notifier_block	nb;
+
+#if defined(CONFIG_TCT_SDM660_COMMON)
+	bool awake_status;
+	spinlock_t awake_spinlock;
+	struct mutex split_lock;
+#endif
 };
 
 struct pl_data *the_chip;
@@ -105,9 +118,136 @@ enum {
 	RESTRICT_CHG_CURRENT,
 };
 
+#if defined(CONFIG_TCT_SDM660_COMMON)
+#define ICL_STEP_UA	25000
+#endif
+
 /*******
  * ICL *
 ********/
+#if defined(CONFIG_TCT_SDM660_COMMON)
+static void split_settled(struct pl_data *chip)
+{
+	int total_current_ua=0;
+	int slave_ua = 0, main_ua = 0, main_settled_ua = 0;
+	union power_supply_propval pval = {0, };
+	int rc, total_settled_ua = 0;
+	int pd_active = 0, supply_type = POWER_SUPPLY_TYPE_UNKNOWN;
+
+	if ((chip->pl_mode != POWER_SUPPLY_PL_USBIN_USBIN)
+		&& (chip->pl_mode != POWER_SUPPLY_PL_USBIN_USBIN_EXT)) {
+		pl_dbg(chip, PR_PARALLEL, "skip for pl_mode=%d\n", chip->pl_mode);
+		return;
+	}
+
+	if (!chip->main_psy) {
+		pl_dbg(chip, PR_PARALLEL, "skip for main_psy=NULL\n");
+		return;
+	}
+
+	if (!chip->usb_psy)
+		chip->usb_psy = power_supply_get_by_name("usb");
+
+	if (!chip->usb_psy) {
+		pr_err("Couldn't get usbpsy while splitting settled\n");
+		return;
+	}
+
+	mutex_lock(&chip->split_lock);
+
+	rc = power_supply_get_property(chip->main_psy,
+			   POWER_SUPPLY_PROP_INPUT_CURRENT_SETTLED, &pval);
+	if (rc < 0) {
+		pr_err("Couldn't get aicl settled value rc=%d\n", rc);
+		goto out;
+	}
+	main_settled_ua = pval.intval;
+	pl_dbg(chip, PR_PARALLEL, 
+				"main_settled_ua=%duA, last pl_settled_ua=%duA\n", 
+				main_settled_ua, chip->pl_settled_ua);
+
+	total_settled_ua = main_settled_ua + chip->pl_settled_ua;
+
+	/* pl changed from disable to enable status */
+	if (!get_effective_result_locked(chip->pl_disable_votable))
+	{
+		slave_ua = (total_settled_ua * chip->slave_pct) / 100;
+	} else { /* pl changed from enable to disable status */
+		slave_ua = 0;
+	}
+
+	rc = power_supply_get_property(chip->usb_psy,
+			POWER_SUPPLY_PROP_PD_ACTIVE, &pval);
+	if (!rc)
+		pd_active = pval.intval;
+
+	rc = power_supply_get_property(chip->usb_psy,
+			POWER_SUPPLY_PROP_REAL_TYPE, &pval);
+	if (!rc)
+		supply_type = pval.intval;
+
+	total_current_ua = get_effective_result_locked(chip->usb_icl_votable);
+	pl_dbg(chip, PR_PARALLEL, "SW ICL=min(%d,%d), pd_active:%d, type:%d\n", 
+			total_settled_ua, total_current_ua, pd_active, supply_type);
+
+	if (!pd_active && (supply_type == POWER_SUPPLY_TYPE_USB_HVDCP)) {
+		if (total_settled_ua >= 1300000) {
+			total_current_ua = min(total_settled_ua, total_current_ua);
+
+			if (slave_ua)
+				slave_ua = (total_current_ua * chip->slave_pct) / 100;
+		}
+	}
+
+	/* WARNING: If pl enabled but icl invalid, how to handle this case? */
+	if ((!total_current_ua) || (slave_ua > total_current_ua)
+		|| (slave_ua && (total_current_ua - slave_ua < ICL_STEP_UA))) {
+		pr_err("?ERROR? %d,%d,%d\n", 
+				total_current_ua, total_settled_ua, slave_ua);
+		total_settled_ua = 0;
+		slave_ua = 0; /* pl enabled but invalid */
+	}
+
+	pval.intval = main_ua = total_current_ua - slave_ua;
+	rc = power_supply_set_property(chip->main_psy,
+				POWER_SUPPLY_PROP_CURRENT_MAX, &pval);
+	if (rc < 0) {
+		pr_err("Couldn't change slave suspend state rc=%d\n", rc);
+		goto out;
+	}
+
+	/* set parallel's ICL could be 0mA when pl is disabled */
+	pval.intval = slave_ua;
+	rc = power_supply_set_property(chip->pl_psy,
+			POWER_SUPPLY_PROP_CURRENT_MAX, &pval);
+	if (rc < 0) {
+		pr_err("Couldn't set parallel icl, rc=%d\n", rc);
+		goto out;
+	}
+
+	/* pl path changed to disable, need rerun icl */
+	if (!slave_ua && (main_ua > main_settled_ua)) {
+		/* set a lower ICL */
+		pval.intval = max(main_settled_ua - ICL_STEP_UA, ICL_STEP_UA);
+		power_supply_set_property(chip->main_psy,
+				POWER_SUPPLY_PROP_CURRENT_MAX, &pval);
+
+		pval.intval = main_ua;
+		power_supply_set_property(chip->main_psy,
+				POWER_SUPPLY_PROP_CURRENT_MAX, &pval);
+	}
+
+	chip->total_settled_ua = total_settled_ua;
+	chip->pl_settled_ua = slave_ua;
+
+out:
+	mutex_unlock(&chip->split_lock);
+
+	pl_dbg(chip, PR_PARALLEL, 
+		"Ended, Split ICL: %d(%d | %d), total_settled_ua=%d\n",
+		total_current_ua, main_ua, slave_ua, total_settled_ua);
+}
+#else
 static void split_settled(struct pl_data *chip)
 {
 	int slave_icl_pct, total_current_ua;
@@ -131,6 +271,7 @@ static void split_settled(struct pl_data *chip)
 			return;
 		}
 		main_settled_ua = pval.intval;
+
 		/* slave gets 10 percent points less for ICL */
 		slave_icl_pct = max(0, chip->slave_pct - 10);
 		slave_ua = ((main_settled_ua + chip->pl_settled_ua)
@@ -154,6 +295,7 @@ static void split_settled(struct pl_data *chip)
 			return;
 		}
 		total_current_ua = pval.intval;
+		pl_dbg(chip, PR_PARALLEL, "usb_psy: HW ICL=%d\n", total_current_ua);
 	}
 
 	/*
@@ -211,6 +353,7 @@ static void split_settled(struct pl_data *chip)
 		"Split total_current_ua=%d main_settled_ua=%d slave_ua=%d\n",
 		total_current_ua, main_settled_ua, slave_ua);
 }
+#endif
 
 static ssize_t version_show(struct class *c, struct class_attribute *attr,
 			char *buf)
@@ -240,6 +383,11 @@ static ssize_t slave_pct_store(struct class *c, struct class_attribute *attr,
 
 	if (kstrtoul(ubuf, 10, &val))
 		return -EINVAL;
+
+#if defined(CONFIG_TCT_SDM660_COMMON)
+	if (val > 80)
+		return -EINVAL;
+#endif
 
 	chip->slave_pct = val;
 	rerun_election(chip->fcc_votable);
@@ -308,6 +456,11 @@ static ssize_t restrict_cur_store(struct class *c, struct class_attribute *attr,
 	if (kstrtoul(ubuf, 10, &val))
 		return -EINVAL;
 
+#if defined(CONFIG_TCT_SDM660_COMMON)
+	if (val > 3500000)
+		return -EINVAL;
+#endif
+
 	chip->restricted_current = val;
 
 	vote(chip->fcc_votable, RESTRICT_CHG_VOTER,
@@ -332,8 +485,10 @@ static struct class_attribute pl_attributes[] = {
  *  TAPER  *
 ************/
 #define MINIMUM_PARALLEL_FCC_UA		500000
-#define PL_TAPER_WORK_DELAY_MS		500
+#define PL_TAPER_WORK_DELAY_MS		100
 #define TAPER_RESIDUAL_PCT		75
+
+#if !defined(CONFIG_TCT_SDM660_COMMON)
 static void pl_taper_work(struct work_struct *work)
 {
 	struct pl_data *chip = container_of(work, struct pl_data,
@@ -385,21 +540,26 @@ static void pl_taper_work(struct work_struct *work)
 done:
 	vote(chip->pl_awake_votable, TAPER_END_VOTER, false, 0);
 }
+#endif
 
 /*********
  *  FCC  *
 **********/
 #define EFFICIENCY_PCT	80
-#define FCC_STEP_SIZE_UA 100000
-#define FCC_STEP_UPDATE_DELAY_MS 1000
-#define STEP_UP 1
-#define STEP_DOWN -1
-static void get_fcc_split(struct pl_data *chip, int total_ua,
+static void split_fcc(struct pl_data *chip, int total_ua,
 			int *master_ua, int *slave_ua)
 {
 	int rc, effective_total_ua, slave_limited_ua, hw_cc_delta_ua = 0,
 		icl_ua, adapter_uv, bcl_ua;
 	union power_supply_propval pval = {0, };
+
+
+#if defined(CONFIG_TCT_SDM660_COMMON)
+	if (!chip->main_psy) {
+		pl_dbg(chip, PR_PARALLEL, "skip for main_psy=NULL\n");
+		return;
+	}
+#endif
 
 	rc = power_supply_get_property(chip->main_psy,
 			       POWER_SUPPLY_PROP_FCC_DELTA, &pval);
@@ -433,6 +593,11 @@ static void get_fcc_split(struct pl_data *chip, int total_ua,
 	effective_total_ua = max(0, total_ua + hw_cc_delta_ua);
 	slave_limited_ua = min(effective_total_ua, bcl_ua);
 	*slave_ua = (slave_limited_ua * chip->slave_pct) / 100;
+
+#if !defined(CONFIG_TCT_SDM660_COMMON)
+	*slave_ua = (*slave_ua * chip->taper_pct) / 100;
+#endif
+
 	/*
 	 * In USBIN_USBIN configuration with internal rsense parallel
 	 * charger's current goes through main charger's BATFET, keep
@@ -443,44 +608,10 @@ static void get_fcc_split(struct pl_data *chip, int total_ua,
 	else
 		*master_ua = max(0, total_ua - *slave_ua);
 
-	*slave_ua = (*slave_ua * chip->taper_pct) / 100;
-}
-
-static void get_fcc_step_update_params(struct pl_data *chip, int main_fcc_ua,
-			int parallel_fcc_ua)
-{
-	union power_supply_propval pval = {0, };
-	int rc;
-
-	/* Read current FCC of main charger */
-	rc = power_supply_get_property(chip->main_psy,
-		POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT_MAX, &pval);
-	if (rc < 0) {
-		pr_err("Couldn't get main charger current fcc, rc=%d\n", rc);
-		return;
-	}
-	chip->main_fcc_ua = pval.intval;
-
-	chip->main_step_fcc_dir = (main_fcc_ua > pval.intval) ?
-				STEP_UP : STEP_DOWN;
-	chip->main_step_fcc_count = abs((main_fcc_ua - pval.intval) /
-				FCC_STEP_SIZE_UA);
-	chip->main_step_fcc_residual = (main_fcc_ua - pval.intval) %
-				FCC_STEP_SIZE_UA;
-
-	chip->parallel_step_fcc_dir = (parallel_fcc_ua > chip->slave_fcc_ua) ?
-				STEP_UP : STEP_DOWN;
-	chip->parallel_step_fcc_count = abs((parallel_fcc_ua -
-				chip->slave_fcc_ua) / FCC_STEP_SIZE_UA);
-	chip->parallel_step_fcc_residual = (parallel_fcc_ua -
-				chip->slave_fcc_ua) % FCC_STEP_SIZE_UA;
-
-	pr_debug("Main FCC Stepper parameters: main_step_direction: %d, main_step_count: %d, main_residual_fcc: %d\n",
-		chip->main_step_fcc_dir, chip->main_step_fcc_count,
-		chip->main_step_fcc_residual);
-	pr_debug("Parallel FCC Stepper parameters: parallel_step_direction: %d, parallel_step_count: %d, parallel_residual_fcc: %d\n",
-		chip->parallel_step_fcc_dir, chip->parallel_step_fcc_count,
-		chip->parallel_step_fcc_residual);
+#if defined(CONFIG_TCT_SDM660_COMMON)
+	pl_dbg(chip, PR_PARALLEL, "ended, FCC split results: %d {%d | %d}, taper_pct=%d\n", 
+			slave_limited_ua, *master_ua, *slave_ua, chip->taper_pct);
+#endif
 }
 
 static int pl_fcc_vote_callback(struct votable *votable, void *data,
@@ -493,40 +624,18 @@ static int pl_fcc_vote_callback(struct votable *votable, void *data,
 	if (total_fcc_ua < 0)
 		return 0;
 
+#if defined(CONFIG_TCT_SDM660_COMMON)
+	if (!chip->main_psy) {
+		pl_dbg(chip, PR_PARALLEL, "skip for main_psy=NULL\n");
+		return 0;
+	}
+#else
 	if (!chip->main_psy)
 		return 0;
-
-	if (!chip->batt_psy) {
-		chip->batt_psy = power_supply_get_by_name("battery");
-		if (!chip->batt_psy)
-			return 0;
-
-		rc = power_supply_get_property(chip->batt_psy,
-				POWER_SUPPLY_PROP_FCC_STEPPER_ENABLE, &pval);
-		if (rc < 0) {
-			pr_err("Couldn't read FCC step update status, rc=%d\n",
-				rc);
-			return rc;
-		}
-		chip->fcc_step_update = pval.intval;
-		pr_debug("FCC Stepper %s\n",
-				pval.intval ? "enabled" : "disabled");
-	}
-
-	if (chip->fcc_step_update)
-		cancel_delayed_work_sync(&chip->fcc_step_update_work);
-
+#endif
 
 	if (chip->pl_mode == POWER_SUPPLY_PL_NONE
 	    || get_effective_result_locked(chip->pl_disable_votable)) {
-		if (chip->fcc_step_update) {
-			vote(chip->pl_awake_votable, FCC_STEPPER_VOTER,
-					true, 0);
-			get_fcc_step_update_params(chip, total_fcc_ua, 0);
-			schedule_delayed_work(&chip->fcc_step_update_work, 0);
-
-			return 0;
-		}
 		pval.intval = total_fcc_ua;
 		rc = power_supply_set_property(chip->main_psy,
 				POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT_MAX,
@@ -534,74 +643,94 @@ static int pl_fcc_vote_callback(struct votable *votable, void *data,
 		if (rc < 0)
 			pr_err("Couldn't set main fcc, rc=%d\n", rc);
 
+#if defined(CONFIG_TCT_SDM660_COMMON)
+		pl_dbg(chip, PR_PARALLEL, "Main-Only: total_fcc_ua=%d(uA)\n", 
+				total_fcc_ua);
+#endif
+
 		return rc;
 	}
 
+#if !defined(CONFIG_TCT_SDM660_COMMON)
 	if (chip->pl_mode != POWER_SUPPLY_PL_NONE) {
-		get_fcc_split(chip, total_fcc_ua,
-			&master_fcc_ua, &slave_fcc_ua);
-		if (chip->fcc_step_update) {
-			vote(chip->pl_awake_votable, FCC_STEPPER_VOTER,
-					true, 0);
-			get_fcc_step_update_params(chip, master_fcc_ua,
-					slave_fcc_ua);
-			schedule_delayed_work(&chip->fcc_step_update_work, 0);
+		split_fcc(chip, total_fcc_ua, &master_fcc_ua, &slave_fcc_ua);
+
+		/*
+		 * If there is an increase in slave share
+		 * (Also handles parallel enable case)
+		 *	Set Main ICL then slave FCC
+		 * else
+		 * (Also handles parallel disable case)
+		 *	Set slave ICL then main FCC.
+		 */
+		if (slave_fcc_ua > chip->slave_fcc_ua) {
+			pval.intval = master_fcc_ua;
+			rc = power_supply_set_property(chip->main_psy,
+				POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT_MAX,
+				&pval);
+			if (rc < 0) {
+				pr_err("Could not set main fcc, rc=%d\n", rc);
+				return rc;
+			}
+
+			pval.intval = slave_fcc_ua;
+			rc = power_supply_set_property(chip->pl_psy,
+				POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT_MAX,
+				&pval);
+			if (rc < 0) {
+				pr_err("Couldn't set parallel fcc, rc=%d\n",
+						rc);
+				return rc;
+			}
+
+			chip->slave_fcc_ua = slave_fcc_ua;
 		} else {
-			/*
-			 * If there is an increase in slave share
-			 * (Also handles parallel enable case)
-			 *	Set Main ICL then slave FCC
-			 * else
-			 * (Also handles parallel disable case)
-			 *	Set slave ICL then main FCC.
-			 */
-			if (slave_fcc_ua > chip->slave_fcc_ua) {
-				pval.intval = master_fcc_ua;
-				rc = power_supply_set_property(chip->main_psy,
+			pval.intval = slave_fcc_ua;
+			rc = power_supply_set_property(chip->pl_psy,
 				POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT_MAX,
 				&pval);
-				if (rc < 0) {
-					pr_err("Could not set main fcc, rc=%d\n",
+			if (rc < 0) {
+				pr_err("Couldn't set parallel fcc, rc=%d\n",
 						rc);
-					return rc;
-				}
+				return rc;
+			}
 
-				pval.intval = slave_fcc_ua;
-				rc = power_supply_set_property(chip->pl_psy,
+			chip->slave_fcc_ua = slave_fcc_ua;
+
+			pval.intval = master_fcc_ua;
+			rc = power_supply_set_property(chip->main_psy,
 				POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT_MAX,
 				&pval);
-				if (rc < 0) {
-					pr_err("Couldn't set parallel fcc, rc=%d\n",
-						rc);
-					return rc;
-				}
-
-				chip->slave_fcc_ua = slave_fcc_ua;
-			} else {
-				pval.intval = slave_fcc_ua;
-				rc = power_supply_set_property(chip->pl_psy,
-				POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT_MAX,
-				&pval);
-				if (rc < 0) {
-					pr_err("Couldn't set parallel fcc, rc=%d\n",
-						rc);
-					return rc;
-				}
-
-				chip->slave_fcc_ua = slave_fcc_ua;
-
-				pval.intval = master_fcc_ua;
-				rc = power_supply_set_property(chip->main_psy,
-				POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT_MAX,
-				&pval);
-				if (rc < 0) {
-					pr_err("Could not set main fcc, rc=%d\n",
-						rc);
-					return rc;
-				}
+			if (rc < 0) {
+				pr_err("Could not set main fcc, rc=%d\n", rc);
+				return rc;
 			}
 		}
 	}
+#else
+	if (chip->pl_mode != POWER_SUPPLY_PL_NONE) {
+		split_fcc(chip, total_fcc_ua, &master_fcc_ua, &slave_fcc_ua);
+
+		pval.intval = slave_fcc_ua;
+		rc = power_supply_set_property(chip->pl_psy,
+				POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT_MAX,
+				&pval);
+		if (rc < 0) {
+			pr_err("Couldn't set parallel fcc, rc=%d\n", rc);
+			return rc;
+		}
+		chip->slave_fcc_ua = slave_fcc_ua;
+
+		pval.intval = master_fcc_ua;
+		rc = power_supply_set_property(chip->main_psy,
+				POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT_MAX,
+				&pval);
+		if (rc < 0) {
+			pr_err("Could not set main fcc, rc=%d\n", rc);
+			return rc;
+		}
+	}
+#endif
 
 	pl_dbg(chip, PR_PARALLEL, "master_fcc=%d slave_fcc=%d distribution=(%d/%d)\n",
 		   master_fcc_ua, slave_fcc_ua,
@@ -609,192 +738,6 @@ static int pl_fcc_vote_callback(struct votable *votable, void *data,
 		   (slave_fcc_ua * 100) / total_fcc_ua);
 
 	return 0;
-}
-
-static void fcc_step_update_work(struct work_struct *work)
-{
-	struct pl_data *chip = container_of(work,
-			struct pl_data, fcc_step_update_work.work);
-	union power_supply_propval pval = {0, };
-	int reschedule_ms = 0, rc = 0;
-	int main_fcc = chip->main_fcc_ua;
-	int parallel_fcc = chip->slave_fcc_ua;
-
-	if (!chip->usb_psy) {
-		chip->usb_psy = power_supply_get_by_name("usb");
-		if (!chip->usb_psy) {
-			pr_err("Couldn't get usb psy\n");
-			return;
-		}
-	}
-
-	/* Check whether USB is present or not */
-	rc = power_supply_get_property(chip->usb_psy,
-				POWER_SUPPLY_PROP_PRESENT, &pval);
-	if (rc < 0) {
-		pr_err("Couldn't get USB Present status, rc=%d\n", rc);
-		return;
-	}
-
-	/*
-	 * If USB is not present, then disable parallel and
-	 * Main FCC to the effective value of FCC votable and exit.
-	 */
-	if (!pval.intval) {
-		/* Disable parallel */
-		parallel_fcc = 0;
-		pval.intval = 1;
-		rc = power_supply_set_property(chip->pl_psy,
-			POWER_SUPPLY_PROP_INPUT_SUSPEND, &pval);
-		if (rc < 0)
-			pr_err("Couldn't change slave suspend state rc=%d\n",
-				rc);
-
-		main_fcc = get_effective_result_locked(chip->fcc_votable);
-		pval.intval = main_fcc;
-		rc = power_supply_set_property(chip->main_psy,
-			POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT_MAX, &pval);
-		if (rc < 0) {
-			pr_err("Couldn't set main charger fcc, rc=%d\n", rc);
-			return;
-		}
-
-		goto stepper_exit;
-	}
-
-	if (chip->main_step_fcc_count) {
-		main_fcc += (FCC_STEP_SIZE_UA * chip->main_step_fcc_dir);
-		chip->main_step_fcc_count--;
-		reschedule_ms = FCC_STEP_UPDATE_DELAY_MS;
-	} else if (chip->main_step_fcc_residual) {
-		main_fcc += chip->main_step_fcc_residual;
-		chip->main_step_fcc_residual = 0;
-	}
-
-	if (chip->parallel_step_fcc_count) {
-		parallel_fcc += (FCC_STEP_SIZE_UA *
-			chip->parallel_step_fcc_dir);
-		chip->parallel_step_fcc_count--;
-		reschedule_ms = FCC_STEP_UPDATE_DELAY_MS;
-	} else if (chip->parallel_step_fcc_residual) {
-		parallel_fcc += chip->parallel_step_fcc_residual;
-		chip->parallel_step_fcc_residual = 0;
-	}
-
-	if (chip->pl_mode == POWER_SUPPLY_PL_NONE ||
-		get_effective_result_locked(chip->pl_disable_votable)) {
-		/* Set Parallel FCC */
-		pval.intval = parallel_fcc;
-		rc = power_supply_set_property(chip->pl_psy,
-			POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT_MAX, &pval);
-		if (rc < 0) {
-			pr_err("Couldn't set parallel charger fcc, rc=%d\n",
-				rc);
-			return;
-		}
-
-		/* Set main FCC */
-		pval.intval = main_fcc;
-		rc = power_supply_set_property(chip->main_psy,
-			POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT_MAX, &pval);
-		if (rc < 0) {
-			pr_err("Couldn't set main charger fcc, rc=%d\n", rc);
-			return;
-		}
-
-		if (parallel_fcc < MINIMUM_PARALLEL_FCC_UA) {
-			pval.intval = 1;
-			rc = power_supply_set_property(chip->pl_psy,
-				POWER_SUPPLY_PROP_INPUT_SUSPEND, &pval);
-			if (rc < 0) {
-				pr_err("Couldn't change slave suspend state rc=%d\n",
-					rc);
-				return;
-			}
-		}
-	} else {
-		if (parallel_fcc < chip->slave_fcc_ua) {
-			pval.intval = parallel_fcc;
-			rc = power_supply_set_property(chip->pl_psy,
-				POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT_MAX,
-				&pval);
-			if (rc < 0) {
-				pr_err("Couldn't set parallel charger fcc, rc=%d\n",
-					rc);
-				return;
-			}
-
-			pval.intval = main_fcc;
-			rc = power_supply_set_property(chip->main_psy,
-				POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT_MAX,
-				&pval);
-			if (rc < 0) {
-				pr_err("Couldn't set main charger fcc, rc=%d\n",
-					rc);
-				return;
-			}
-		} else {
-			pval.intval = main_fcc;
-			rc = power_supply_set_property(chip->main_psy,
-				POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT_MAX,
-				&pval);
-			if (rc < 0) {
-				pr_err("Couldn't set main charger fcc, rc=%d\n",
-					rc);
-				return;
-			}
-
-			pval.intval = parallel_fcc;
-			rc = power_supply_set_property(chip->pl_psy,
-				POWER_SUPPLY_PROP_CONSTANT_CHARGE_CURRENT_MAX,
-				&pval);
-			if (rc < 0) {
-				pr_err("Couldn't set parallel charger fcc, rc=%d\n",
-					rc);
-				return;
-			}
-		}
-
-		rc = power_supply_get_property(chip->pl_psy,
-				POWER_SUPPLY_PROP_INPUT_SUSPEND, &pval);
-		if (rc < 0) {
-			pr_err("Couldn't get slave suspend status, rc=%d\n",
-					rc);
-			return;
-		}
-
-		/*
-		 * Enable parallel charger only if it was disabled earlier and
-		 * configured slave fcc is greater than or equal to 100mA.
-		 */
-		if (pval.intval == 1 && parallel_fcc >= 100000) {
-			pval.intval = 0;
-			rc = power_supply_set_property(chip->pl_psy,
-				POWER_SUPPLY_PROP_INPUT_SUSPEND, &pval);
-			if (rc < 0) {
-				pr_err("Couldn't change slave suspend state rc=%d\n",
-						rc);
-				return;
-			}
-
-			if ((chip->pl_mode == POWER_SUPPLY_PL_USBIN_USBIN) ||
-				(chip->pl_mode ==
-				POWER_SUPPLY_PL_USBIN_USBIN_EXT))
-				split_settled(chip);
-		}
-	}
-
-stepper_exit:
-	chip->main_fcc_ua = main_fcc;
-	chip->slave_fcc_ua = parallel_fcc;
-
-	if (reschedule_ms) {
-		schedule_delayed_work(&chip->fcc_step_update_work,
-				msecs_to_jiffies(reschedule_ms));
-		pr_debug("Rescheduling FCC_STEPPER work\n");
-	} else {
-		vote(chip->pl_awake_votable, FCC_STEPPER_VOTER, false, 0);
-	}
 }
 
 #define PARALLEL_FLOAT_VOLTAGE_DELTA_UV 50000
@@ -808,8 +751,15 @@ static int pl_fv_vote_callback(struct votable *votable, void *data,
 	if (fv_uv < 0)
 		return 0;
 
+#if defined(CONFIG_TCT_SDM660_COMMON)
+	if (!chip->main_psy) {
+		pl_dbg(chip, PR_PARALLEL, "skip for main_psy=NULL\n");
+		return 0;
+	}
+#else
 	if (!chip->main_psy)
 		return 0;
+#endif
 
 	pval.intval = fv_uv;
 
@@ -833,8 +783,14 @@ static int pl_fv_vote_callback(struct votable *votable, void *data,
 	return 0;
 }
 
+
+
+#if defined(CONFIG_TCT_SDM660_COMMON)
+#define PL_DELAY_MS     10000
+#else
 #define ICL_STEP_UA	25000
 #define PL_DELAY_MS     3000
+#endif
 static int usb_icl_vote_callback(struct votable *votable, void *data,
 			int icl_ua, const char *client)
 {
@@ -843,11 +799,22 @@ static int usb_icl_vote_callback(struct votable *votable, void *data,
 	union power_supply_propval pval = {0, };
 	bool rerun_aicl = false;
 
+#if defined(CONFIG_TCT_SDM660_COMMON)
+	if (!chip->main_psy) {
+		pl_dbg(chip, PR_PARALLEL, "skip for main_psy=NULL\n");
+		return 0;
+	}
+#else
 	if (!chip->main_psy)
 		return 0;
+#endif
 
 	if (client == NULL)
 		icl_ua = INT_MAX;
+
+#if defined(CONFIG_TCT_SDM660_COMMON)
+	pl_dbg(chip, PR_PARALLEL, "icl_ua=%d(uA) \n", icl_ua);
+#endif
 
 	/*
 	 * Disable parallel for new ICL vote - the call to split_settled will
@@ -891,8 +858,6 @@ static int usb_icl_vote_callback(struct votable *votable, void *data,
 		power_supply_set_property(chip->main_psy,
 				POWER_SUPPLY_PROP_CURRENT_MAX,
 				&pval);
-		/* wait for ICL change */
-		msleep(20);
 	}
 
 	/* set the effective ICL */
@@ -911,6 +876,10 @@ static void pl_disable_forever_work(struct work_struct *work)
 	struct pl_data *chip = container_of(work,
 			struct pl_data, pl_disable_forever_work);
 
+#if defined(CONFIG_TCT_SDM660_COMMON)
+	pr_err("[ERROR] parallel chg disabled forever\n");
+#endif
+
 	/* Disable Parallel charger forever */
 	vote(chip->pl_disable_votable, PL_HW_ABSENT_VOTER, true, 0);
 
@@ -919,14 +888,76 @@ static void pl_disable_forever_work(struct work_struct *work)
 		vote(chip->hvdcp_hw_inov_dis_votable, PL_VOTER, false, 0);
 }
 
-static void pl_awake_work(struct work_struct *work)
+#if defined(CONFIG_TCT_SDM660_COMMON)
+static int pl_disable_vote_callback(struct votable *votable,
+		void *data, int pl_disable, const char *client)
 {
-	struct pl_data *chip = container_of(work,
-			struct pl_data, pl_awake_work.work);
+	struct pl_data *chip = data;
+	union power_supply_propval pval = {0, };
+	int rc;
 
-	vote(chip->pl_awake_votable, PL_VOTER, false, 0);
+	pl_dbg(chip, PR_PARALLEL, "pl_psy is '%s', pl_disable=%d\n",
+		   chip->pl_psy ? "Present" : "Absent",
+		   pl_disable);
+
+	if(!chip->batt_psy || !chip->pl_psy)
+		return 0;
+
+	if (!pl_disable) {
+		rc = power_supply_get_property(chip->pl_psy,
+				POWER_SUPPLY_PROP_CHARGE_TYPE, &pval);
+		if (rc == -ENODEV) {
+			/*
+			 * -ENODEV is returned only if parallel chip
+			 * is not present in the system.
+			 * Disable parallel charger forever.
+			 */
+			schedule_work(&chip->pl_disable_forever_work);
+			return rc;
+		}
+		rerun_election(chip->fv_votable);
+		rerun_election(chip->fcc_votable);
+
+		/*
+		 * Enable will be called with a valid pl_psy always. The
+		 * PARALLEL_PSY_VOTER keeps it disabled unless a pl_psy
+		 * is seen.
+		 */
+		pval.intval = 0;
+		rc = power_supply_set_property(chip->pl_psy,
+				POWER_SUPPLY_PROP_INPUT_SUSPEND, &pval);
+		if (rc < 0)
+			pr_err("Couldn't change slave suspend state rc=%d\n",
+				rc);
+
+		if ((chip->pl_mode == POWER_SUPPLY_PL_USBIN_USBIN)
+			|| (chip->pl_mode == POWER_SUPPLY_PL_USBIN_USBIN_EXT))
+			split_settled(chip);
+	} else {
+		if ((chip->pl_mode == POWER_SUPPLY_PL_USBIN_USBIN)
+			|| (chip->pl_mode == POWER_SUPPLY_PL_USBIN_USBIN_EXT))
+			split_settled(chip);
+
+		/* pl_psy may be NULL while in the disable branch */
+		if (chip->pl_psy) {
+			pval.intval = 1;
+			rc = power_supply_set_property(chip->pl_psy,
+					POWER_SUPPLY_PROP_INPUT_SUSPEND, &pval);
+			if (rc < 0)
+				pr_err("Couldn't change slave suspend state rc=%d\n",
+					rc);
+		}
+		rerun_election(chip->fcc_votable);
+		rerun_election(chip->fv_votable);
+	}
+
+	pl_dbg(chip, PR_PARALLEL, "ended, pl_mode=%d, parallel '%s'\n",
+		   chip->pl_mode,
+		   pl_disable ? "disabled" : "enabled");
+
+	return 0;
 }
-
+#else
 static int pl_disable_vote_callback(struct votable *votable,
 		void *data, int pl_disable, const char *client)
 {
@@ -938,15 +969,7 @@ static int pl_disable_vote_callback(struct votable *votable,
 	chip->total_settled_ua = 0;
 	chip->pl_settled_ua = 0;
 
-	/* Cancel FCC step change work */
-	cancel_delayed_work_sync(&chip->fcc_step_update_work);
-
-	if (!pl_disable) { /* enable */
-		/* keep system awake to talk to slave charger through i2c */
-		cancel_delayed_work_sync(&chip->pl_awake_work);
-		if (chip->pl_awake_votable)
-			vote(chip->pl_awake_votable, PL_VOTER, true, 0);
-
+	if (!pl_disable) {
 		rc = power_supply_get_property(chip->pl_psy,
 				POWER_SUPPLY_PROP_CHARGE_TYPE, &pval);
 		if (rc == -ENODEV) {
@@ -966,19 +989,16 @@ static int pl_disable_vote_callback(struct votable *votable,
 		 * PARALLEL_PSY_VOTER keeps it disabled unless a pl_psy
 		 * is seen.
 		 */
-		if (!chip->fcc_step_update) {
-			pval.intval = 0;
-			rc = power_supply_set_property(chip->pl_psy,
+		pval.intval = 0;
+		rc = power_supply_set_property(chip->pl_psy,
 				POWER_SUPPLY_PROP_INPUT_SUSPEND, &pval);
-			if (rc < 0)
-				pr_err("Couldn't change slave suspend state rc=%d\n",
-					rc);
+		if (rc < 0)
+			pr_err("Couldn't change slave suspend state rc=%d\n",
+				rc);
 
-			if ((chip->pl_mode == POWER_SUPPLY_PL_USBIN_USBIN) ||
-				(chip->pl_mode ==
-				POWER_SUPPLY_PL_USBIN_USBIN_EXT))
-				split_settled(chip);
-		}
+		if ((chip->pl_mode == POWER_SUPPLY_PL_USBIN_USBIN)
+			|| (chip->pl_mode == POWER_SUPPLY_PL_USBIN_USBIN_EXT))
+			split_settled(chip);
 		/*
 		 * we could have been enabled while in taper mode,
 		 *  start the taper work if so
@@ -999,25 +1019,17 @@ static int pl_disable_vote_callback(struct votable *votable,
 			|| (chip->pl_mode == POWER_SUPPLY_PL_USBIN_USBIN_EXT))
 			split_settled(chip);
 
-		if (!chip->fcc_step_update) {
-			/* pl_psy may be NULL while in the disable branch */
-			if (chip->pl_psy) {
-				pval.intval = 1;
-				rc = power_supply_set_property(chip->pl_psy,
+		/* pl_psy may be NULL while in the disable branch */
+		if (chip->pl_psy) {
+			pval.intval = 1;
+			rc = power_supply_set_property(chip->pl_psy,
 					POWER_SUPPLY_PROP_INPUT_SUSPEND, &pval);
-				if (rc < 0)
-					pr_err("Couldn't change slave suspend state rc=%d\n",
-						rc);
-			}
+			if (rc < 0)
+				pr_err("Couldn't change slave suspend state rc=%d\n",
+					rc);
 		}
-
 		rerun_election(chip->fcc_votable);
 		rerun_election(chip->fv_votable);
-
-		cancel_delayed_work_sync(&chip->pl_awake_work);
-		if (chip->pl_awake_votable)
-			schedule_delayed_work(&chip->pl_awake_work,
-							msecs_to_jiffies(5000));
 	}
 
 	pl_dbg(chip, PR_PARALLEL, "parallel charging %s\n",
@@ -1025,6 +1037,7 @@ static int pl_disable_vote_callback(struct votable *votable,
 
 	return 0;
 }
+#endif
 
 static int pl_enable_indirect_vote_callback(struct votable *votable,
 			void *data, int pl_enable, const char *client)
@@ -1036,6 +1049,22 @@ static int pl_enable_indirect_vote_callback(struct votable *votable,
 	return 0;
 }
 
+#if defined(CONFIG_TCT_SDM660_COMMON)
+static void battery_pl_awake(struct pl_data *chip, bool request_awake)
+{
+	spin_lock(&chip->awake_spinlock);
+	if (!chip->awake_status && request_awake)
+		__pm_stay_awake(chip->pl_ws);
+	else if (chip->awake_status && !request_awake)
+		__pm_relax(chip->pl_ws);
+
+	chip->awake_status = request_awake;
+	spin_unlock(&chip->awake_spinlock);
+}
+#endif
+
+
+#if !defined(CONFIG_TCT_SDM660_COMMON)
 static int pl_awake_vote_callback(struct votable *votable,
 			void *data, int awake, const char *client)
 {
@@ -1049,6 +1078,7 @@ static int pl_awake_vote_callback(struct votable *votable,
 	pr_debug("client: %s awake: %d\n", client, awake);
 	return 0;
 }
+#endif
 
 static bool is_main_available(struct pl_data *chip)
 {
@@ -1116,6 +1146,8 @@ static bool is_parallel_available(struct pl_data *chip)
 	return true;
 }
 
+
+#if defined(CONFIG_TCT_SDM660_COMMON)
 static void handle_main_charge_type(struct pl_data *chip)
 {
 	union power_supply_propval pval = {0, };
@@ -1131,6 +1163,45 @@ static void handle_main_charge_type(struct pl_data *chip)
 	/* not fast/not taper state to disables parallel */
 	if ((pval.intval != POWER_SUPPLY_CHARGE_TYPE_FAST)
 		&& (pval.intval != POWER_SUPPLY_CHARGE_TYPE_TAPER)) {
+		pl_dbg(chip, PR_PARALLEL, "not fast/taper state, disables parallel\n");
+		vote(chip->pl_disable_votable, CHG_STATE_VOTER, true, 0);
+		vote(chip->pl_disable_votable, TAPER_END_VOTER, false, 0);
+
+		mutex_lock(&chip->split_lock);
+		chip->total_settled_ua = 0;
+		chip->pl_settled_ua = 0;
+		mutex_unlock(&chip->split_lock);
+		return;
+	}
+
+	if (pval.intval == POWER_SUPPLY_CHARGE_TYPE_TAPER) {
+		pl_dbg(chip, PR_PARALLEL, "taper entry disabling pl\n");
+		vote(chip->pl_disable_votable, TAPER_END_VOTER, true, 0);
+	} else if (pval.intval == POWER_SUPPLY_CHARGE_TYPE_FAST) {
+		pl_dbg(chip, PR_PARALLEL, "chg_state enabling pl\n");
+		vote(chip->pl_disable_votable, CHG_STATE_VOTER, false, 0);
+	}
+}
+#else
+static void handle_main_charge_type(struct pl_data *chip)
+{
+	union power_supply_propval pval = {0, };
+	int rc;
+
+	/* smblib_get_prop_batt_charge_type() */
+	rc = power_supply_get_property(chip->batt_psy,
+			       POWER_SUPPLY_PROP_CHARGE_TYPE, &pval);
+	if (rc < 0) {
+		pr_err("Couldn't get batt charge type rc=%d\n", rc);
+		return;
+	}
+
+	/* not fast/not taper state to disables parallel */
+	if ((pval.intval != POWER_SUPPLY_CHARGE_TYPE_FAST)
+		&& (pval.intval != POWER_SUPPLY_CHARGE_TYPE_TAPER)) {
+		pl_dbg(chip, PR_PARALLEL, "not fast/taper state, disables parallel\n");
+
+		/* VOTE_SET_ANY, pl_disable_vote_callback() */
 		vote(chip->pl_disable_votable, CHG_STATE_VOTER, true, 0);
 		chip->taper_pct = 100;
 		vote(chip->pl_disable_votable, TAPER_END_VOTER, false, 0);
@@ -1161,8 +1232,83 @@ static void handle_main_charge_type(struct pl_data *chip)
 	/* remember the new state only if it isn't any of the above */
 	chip->charge_type = pval.intval;
 }
+#endif
+
 
 #define MIN_ICL_CHANGE_DELTA_UA		300000
+
+#if defined(CONFIG_TCT_SDM660_COMMON)
+static void handle_settled_icl_change(struct pl_data *chip)
+{
+	union power_supply_propval pval = {0, };
+	int new_total_settled_ua;
+	int rc;
+	int main_settled_ua;
+	int total_current_ua;
+	int icl_gaps = 0;
+	bool need_resplit = false;
+
+	total_current_ua = get_effective_result(chip->usb_icl_votable);
+
+	pl_dbg(chip, PR_PARALLEL, "effective ICL voter: '%s', %d\n",
+			get_effective_client_locked(chip->usb_icl_votable),
+			total_current_ua);
+
+	mutex_lock(&chip->split_lock);
+	rc = power_supply_get_property(chip->main_psy,
+			       POWER_SUPPLY_PROP_INPUT_CURRENT_SETTLED,
+			       &pval);
+	if (rc < 0) {
+		pr_err("Couldn't get aicl settled value rc=%d\n", rc);
+		mutex_unlock(&chip->split_lock);
+		return;
+	}
+	main_settled_ua = pval.intval;
+	new_total_settled_ua = main_settled_ua + chip->pl_settled_ua;
+	icl_gaps = abs(new_total_settled_ua - chip->total_settled_ua);
+	if ((icl_gaps > MIN_ICL_CHANGE_DELTA_UA) 
+		|| (chip->pl_settled_ua > main_settled_ua)) {
+		need_resplit = true;
+	}
+	mutex_unlock(&chip->split_lock);
+
+	pl_dbg(chip, PR_PARALLEL, "%d=(%d+%d)<=1400mA ?\n",
+			new_total_settled_ua, main_settled_ua, chip->pl_settled_ua);
+
+	if ((new_total_settled_ua < 1400000)
+		|| (main_settled_ua == 0)
+		|| ((total_current_ua >= 0) && (total_current_ua <= 1400000))) {
+		pl_dbg(chip, PR_PARALLEL, "Voted pl_enable [false] by I voter\n");
+		vote(chip->pl_enable_votable_indirect, USBIN_I_VOTER, false, 0);
+	}
+	else {
+		pl_dbg(chip, PR_PARALLEL, "Voted pl_enable [true] by I voter\n");
+		vote(chip->pl_enable_votable_indirect, USBIN_I_VOTER, true, 0);
+	}
+
+	if (get_effective_result(chip->pl_disable_votable)) {
+		pl_dbg(chip, PR_PARALLEL, "ended, parallel already disabled, return\n");
+		return;
+	}
+
+	if (chip->pl_mode == POWER_SUPPLY_PL_USBIN_USBIN
+			|| chip->pl_mode == POWER_SUPPLY_PL_USBIN_USBIN_EXT) {
+		pl_dbg(chip, PR_PARALLEL,
+			"total ICL: old(%d)->new(%d), gaps=%d > 300000uA ??\n",
+			chip->total_settled_ua, new_total_settled_ua, icl_gaps);
+
+		if (need_resplit)
+			split_settled(chip);
+		else
+			pl_dbg(chip, PR_PARALLEL, "[ICL be stable at] %d ~ %d\n",
+					chip->total_settled_ua, 
+					new_total_settled_ua);
+	} 
+	else {
+		rerun_election(chip->fcc_votable);
+	}
+}
+#else
 static void handle_settled_icl_change(struct pl_data *chip)
 {
 	union power_supply_propval pval = {0, };
@@ -1229,7 +1375,9 @@ static void handle_settled_icl_change(struct pl_data *chip)
 		rerun_election(chip->fcc_votable);
 	}
 }
+#endif
 
+#if !defined(CONFIG_TCT_SDM660_COMMON)
 static void handle_parallel_in_taper(struct pl_data *chip)
 {
 	union power_supply_propval pval = {0, };
@@ -1258,7 +1406,53 @@ static void handle_parallel_in_taper(struct pl_data *chip)
 		return;
 	}
 }
+#endif
 
+#if defined(CONFIG_TCT_SDM660_COMMON)
+static void status_change_work(struct work_struct *work)
+{
+	struct pl_data *chip = container_of(work,
+			struct pl_data, status_change_work.work);
+
+	if (!chip->main_psy && is_main_available(chip)) {
+		/*
+		 * re-run election for FCC/FV/ICL once main_psy
+		 * is available to ensure all votes are reflected
+		 * on hardware
+		 */
+		rerun_election(chip->usb_icl_votable);
+		rerun_election(chip->fcc_votable);
+		rerun_election(chip->fv_votable);
+	}
+
+	if (!chip->main_psy) {
+		pl_dbg(chip, PR_PARALLEL, "skip for main_psy=NULL\n");
+		goto out;
+	}
+
+	if (!is_batt_available(chip)) {
+		pl_dbg(chip, PR_PARALLEL, "skip for batt_psy=NULL\n");
+		goto out;
+	}
+
+	if (!chip->usb_psy)
+		chip->usb_psy = power_supply_get_by_name("usb");
+
+	if (!chip->usb_psy) {
+		pl_dbg(chip, PR_PARALLEL, "skip for usb_psy=NULL\n");
+		goto out;
+	}
+
+	is_parallel_available(chip);
+
+	handle_main_charge_type(chip);
+	handle_settled_icl_change(chip);
+
+out:
+	battery_pl_awake(chip, false);
+	pl_dbg(chip, PR_PARALLEL, "ended.\n");
+}
+#else
 static void status_change_work(struct work_struct *work)
 {
 	struct pl_data *chip = container_of(work,
@@ -1287,6 +1481,7 @@ static void status_change_work(struct work_struct *work)
 	handle_settled_icl_change(chip);
 	handle_parallel_in_taper(chip);
 }
+#endif
 
 static int pl_notifier_call(struct notifier_block *nb,
 		unsigned long ev, void *v)
@@ -1297,10 +1492,19 @@ static int pl_notifier_call(struct notifier_block *nb,
 	if (ev != PSY_EVENT_PROP_CHANGED)
 		return NOTIFY_OK;
 
+#if defined(CONFIG_TCT_SDM660_COMMON)
+	if ((strcmp(psy->desc->name, "parallel") == 0)
+	    || (strcmp(psy->desc->name, "battery") == 0)
+	    || (strcmp(psy->desc->name, "main") == 0)) {
+		battery_pl_awake(chip, true);
+		schedule_delayed_work(&chip->status_change_work, 0);
+	}
+#else
 	if ((strcmp(psy->desc->name, "parallel") == 0)
 	    || (strcmp(psy->desc->name, "battery") == 0)
 	    || (strcmp(psy->desc->name, "main") == 0))
 		schedule_delayed_work(&chip->status_change_work, 0);
+#endif
 
 	return NOTIFY_OK;
 }
@@ -1340,18 +1544,18 @@ int qcom_batt_init(void)
 	chip = kzalloc(sizeof(*chip), GFP_KERNEL);
 	if (!chip)
 		return -ENOMEM;
+
+#if defined(CONFIG_TCT_SDM660_COMMON)
+	chip->slave_pct = 40;
+#else
 	chip->slave_pct = 50;
+#endif
+
 	chip->restricted_current = DEFAULT_RESTRICTED_CURRENT_UA;
 
 	chip->pl_ws = wakeup_source_register("qcom-battery");
 	if (!chip->pl_ws)
 		goto cleanup;
-
-	INIT_DELAYED_WORK(&chip->status_change_work, status_change_work);
-	INIT_DELAYED_WORK(&chip->pl_taper_work, pl_taper_work);
-	INIT_WORK(&chip->pl_disable_forever_work, pl_disable_forever_work);
-	INIT_DELAYED_WORK(&chip->pl_awake_work, pl_awake_work);
-	INIT_DELAYED_WORK(&chip->fcc_step_update_work, fcc_step_update_work);
 
 	chip->fcc_votable = create_votable("FCC", VOTE_MIN,
 					pl_fcc_vote_callback,
@@ -1361,9 +1565,15 @@ int qcom_batt_init(void)
 		goto release_wakeup_source;
 	}
 
+#if defined(CONFIG_TCT_SDM660_COMMON)
 	chip->fv_votable = create_votable("FV", VOTE_MIN,
 					pl_fv_vote_callback,
 					chip);
+#else
+	chip->fv_votable = create_votable("FV", VOTE_MAX,
+					pl_fv_vote_callback,
+					chip);
+#endif
 	if (IS_ERR(chip->fv_votable)) {
 		rc = PTR_ERR(chip->fv_votable);
 		goto destroy_votable;
@@ -1388,6 +1598,7 @@ int qcom_batt_init(void)
 	vote(chip->pl_disable_votable, TAPER_END_VOTER, false, 0);
 	vote(chip->pl_disable_votable, PARALLEL_PSY_VOTER, true, 0);
 
+#if !defined(CONFIG_TCT_SDM660_COMMON)
 	chip->pl_awake_votable = create_votable("PL_AWAKE", VOTE_SET_ANY,
 					pl_awake_vote_callback,
 					chip);
@@ -1395,6 +1606,7 @@ int qcom_batt_init(void)
 		rc = PTR_ERR(chip->pl_disable_votable);
 		goto destroy_votable;
 	}
+#endif
 
 	chip->pl_enable_votable_indirect = create_votable("PL_ENABLE_INDIRECT",
 					VOTE_SET_ANY,
@@ -1407,11 +1619,25 @@ int qcom_batt_init(void)
 
 	vote(chip->pl_disable_votable, PL_INDIRECT_VOTER, true, 0);
 
+	INIT_DELAYED_WORK(&chip->status_change_work, status_change_work);
+
+#if !defined(CONFIG_TCT_SDM660_COMMON)
+	INIT_DELAYED_WORK(&chip->pl_taper_work, pl_taper_work);
+#endif
+
+	INIT_WORK(&chip->pl_disable_forever_work, pl_disable_forever_work);
+
 	rc = pl_register_notifier(chip);
 	if (rc < 0) {
 		pr_err("Couldn't register psy notifier rc = %d\n", rc);
 		goto unreg_notifier;
 	}
+
+#if defined(CONFIG_TCT_SDM660_COMMON)
+	chip->awake_status = false;
+	spin_lock_init(&chip->awake_spinlock);
+	mutex_init(&chip->split_lock);
+#endif
 
 	rc = pl_determine_initial_status(chip);
 	if (rc < 0) {
@@ -1437,7 +1663,11 @@ unreg_notifier:
 	power_supply_unreg_notifier(&chip->nb);
 destroy_votable:
 	destroy_votable(chip->pl_enable_votable_indirect);
+
+#if !defined(CONFIG_TCT_SDM660_COMMON)
 	destroy_votable(chip->pl_awake_votable);
+#endif
+
 	destroy_votable(chip->pl_disable_votable);
 	destroy_votable(chip->fv_votable);
 	destroy_votable(chip->fcc_votable);
@@ -1457,14 +1687,20 @@ void qcom_batt_deinit(void)
 		return;
 
 	cancel_delayed_work_sync(&chip->status_change_work);
+
+#if !defined(CONFIG_TCT_SDM660_COMMON)
 	cancel_delayed_work_sync(&chip->pl_taper_work);
+#endif
+
 	cancel_work_sync(&chip->pl_disable_forever_work);
-	cancel_delayed_work_sync(&chip->pl_awake_work);
-	cancel_delayed_work_sync(&chip->fcc_step_update_work);
 
 	power_supply_unreg_notifier(&chip->nb);
 	destroy_votable(chip->pl_enable_votable_indirect);
+
+#if !defined(CONFIG_TCT_SDM660_COMMON)
 	destroy_votable(chip->pl_awake_votable);
+#endif
+
 	destroy_votable(chip->pl_disable_votable);
 	destroy_votable(chip->fv_votable);
 	destroy_votable(chip->fcc_votable);

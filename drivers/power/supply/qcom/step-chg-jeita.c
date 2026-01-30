@@ -9,7 +9,11 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  */
+#if defined(CONFIG_TCT_SDM660_COMMON)
+#define pr_fmt(fmt) "[STEPCHG]: %s(): " fmt, __func__
+#else
 #define pr_fmt(fmt) "QCOM-STEPCHG: %s: " fmt, __func__
+#endif
 
 #include <linux/delay.h>
 #include <linux/module.h>
@@ -17,6 +21,14 @@
 #include <linux/slab.h>
 #include <linux/pmic-voter.h>
 #include "step-chg-jeita.h"
+
+#if defined(CONFIG_TCT_SDM660_COMMON)
+static int step_chg_disable = 0;
+module_param_named(
+	step_chg_disable, step_chg_disable,
+	int, S_IRUSR | S_IWUSR
+);
+#endif
 
 #define MAX_STEP_CHG_ENTRIES	8
 #define STEP_CHG_VOTER		"STEP_CHG_VOTER"
@@ -68,6 +80,13 @@ struct step_chg_info {
 	struct votable		*fv_votable;
 	struct wakeup_source	*step_chg_ws;
 	struct power_supply	*batt_psy;
+
+#if defined(CONFIG_TCT_SDM660_COMMON)
+	struct power_supply	*usb_psy;
+	bool awake_status;
+	spinlock_t awake_spinlock;
+#endif
+
 	struct delayed_work	status_change_work;
 	struct notifier_block	nb;
 };
@@ -85,11 +104,20 @@ static struct step_chg_info *the_chip;
 static struct step_chg_cfg step_chg_config = {
 	.psy_prop	= POWER_SUPPLY_PROP_VOLTAGE_NOW,
 	.prop_name	= "VBATT",
-	.hysteresis	= 20000, /* 100mV */
+	.hysteresis	= 100000, /* 100mV */
 	.fcc_cfg	= {
 		/* VBAT_LOW	VBAT_HIGH	FCC */
-		{3000000,	4100000,	2000000},
-		{4101000,	4400000,	1200000},
+#if defined(CONFIG_TCT_SDM660_ATHENA)
+		{0,		4100000,	3200000},
+		{4100001,	4500000,	2250000},
+#elif defined(CONFIG_TCT_SDM636_LUNA)
+		{0,		4250000,	2900000},
+		{4250001,	4500000,	2000000},
+#else
+		{3600000,	4000000,	3000000},
+		{4001000,	4200000,	2800000},
+		{4201000,	4400000,	2000000},
+#endif
 	},
 	/*
 	 *	SOC STEP-CHG configuration example.
@@ -120,9 +148,20 @@ static struct jeita_fcc_cfg jeita_fcc_config = {
 	.hysteresis	= 10, /* 1degC hysteresis */
 	.fcc_cfg	= {
 		/* TEMP_LOW	TEMP_HIGH	FCC */
- 		{0,		150,		600000},
- 		{151,		450,		2000000},
- 		{451,		550,		600000},
+#if defined(CONFIG_TCT_SDM660_ATHENA)
+		{0,	100,		2250000},
+		{101,	450,		3200000},
+		{451,	600,		2250000},
+#elif defined(CONFIG_TCT_SDM636_LUNA)
+		{0,	100,		2000000},
+		{101,	450,		2900000},
+		{451,	600,		2000000},
+#else
+		{0,		100,		600000},
+		{101,		200,		2000000},
+		{201,		450,		3000000},
+		{451,		550,		600000},
+#endif
 	},
 };
 
@@ -132,114 +171,21 @@ static struct jeita_fv_cfg jeita_fv_config = {
 	.hysteresis	= 10, /* 1degC hysteresis */
 	.fv_cfg		= {
 		/* TEMP_LOW	TEMP_HIGH	FCC */
- 		{0,		150,		4100000},
-		{151,		450,		4400000},
- 		{451,		550,		4100000},
+#if defined(CONFIG_TCT_SDM660_ATHENA)
+		{0, 		100,		4402500},
+		{101,		450,		4402500},
+		{451,		600,		4100000},
+#elif defined(CONFIG_TCT_SDM636_LUNA)
+		{0, 		100,		4402500},
+		{101,		450,		4402500},
+		{451,		600,		4100000},
+#else
+		{0,		100,		4200000},
+		{101,		450,		4400000},
+		{451,		550,		4200000},
+#endif
 	},
 };
-
-int fih_set_step_chg_hysteresis(int hysteresis, int mode)
-{
-	if(hysteresis < 0)
-		return -1;
-
-	switch(mode) {
-	case STEP_CHG_CFG:
-		step_chg_config.hysteresis = hysteresis;
-		break;
-	case JEITA_FCC_CFG:
-		jeita_fcc_config.hysteresis = hysteresis;
-		break;
-	case JEITA_FV_CFG:
-		jeita_fv_config.hysteresis = hysteresis;
-		break;
-	default:
-		break;
-	}
-	return 0;
-}
-
-int fih_set_step_chg_cfg(int *cfg, int cfg_len, int mode)
-{
-	int i =0;
-
-	if(cfg_len > MAX_STEP_CHG_ENTRIES)
-		return -1;
-
-	switch(mode) {
-	case STEP_CHG_CFG:
-		for(i=0; i < cfg_len; i++)
-		{
-			step_chg_config.fcc_cfg[i].low_threshold = cfg[i*3];
-			step_chg_config.fcc_cfg[i].high_threshold = cfg[i*3 + 1];
-			step_chg_config.fcc_cfg[i].value = cfg[i*3 + 2];
-		}
-		break;
-	case JEITA_FCC_CFG:
-		for(i=0; i < cfg_len; i++)
-		{
-			jeita_fcc_config.fcc_cfg[i].low_threshold = cfg[i*3];
-			jeita_fcc_config.fcc_cfg[i].high_threshold = cfg[i*3 + 1];
-			jeita_fcc_config.fcc_cfg[i].value = cfg[i*3 + 2];
-		}
-		break;
-	case JEITA_FV_CFG:
-		for(i=0; i < cfg_len; i++)
-		{
-			jeita_fv_config.fv_cfg[i].low_threshold = cfg[i*3];
-			jeita_fv_config.fv_cfg[i].high_threshold = cfg[i*3 + 1];
-			jeita_fv_config.fv_cfg[i].value = cfg[i*3 + 2];
-		}
-		break;
-	default:
-		break;
-	}
-	return 0;
-
-}
-
-void fih_dump_cfg(void)
-{
-	int i =0;
-	
-	pr_err("sw step charging cfg dump: \n");
-	if(step_chg_config.psy_prop == POWER_SUPPLY_PROP_VOLTAGE_NOW)
-		pr_err("    .psy_prop = POWER_SUPPLY_PROP_VOLTAGE_NOW\n");
-	else
-		pr_err("    .psy_prop = unknow\n");
-	pr_err("    .prop_name = %s\n", step_chg_config.prop_name);
-	pr_err("    .hysteresis = %d\n", step_chg_config.hysteresis);
-	pr_err("    .fcc_cfg = { \n");
-	for(i=0;i<MAX_STEP_CHG_ENTRIES; i++)
-		pr_err("        {%d, %d, %d}\n", step_chg_config.fcc_cfg[i].low_threshold, step_chg_config.fcc_cfg[i].high_threshold, step_chg_config.fcc_cfg[i].value);
-	pr_err("    } \n");
-
-	pr_err("sw jeita fcc cfg dump: \n");
-	if(jeita_fcc_config.psy_prop == POWER_SUPPLY_PROP_TEMP)
-		pr_err("    .psy_prop = POWER_SUPPLY_PROP_TEMP\n");
-	else
-		pr_err("    .psy_prop = unknow\n");
-	pr_err("    .prop_name = %s\n", jeita_fcc_config.prop_name);
-	pr_err("    .hysteresis = %d\n", jeita_fcc_config.hysteresis);
-	pr_err("    .fcc_cfg = { \n");
-	for(i=0;i<MAX_STEP_CHG_ENTRIES; i++)
-		pr_err("        {%d, %d, %d}\n", jeita_fcc_config.fcc_cfg[i].low_threshold, jeita_fcc_config.fcc_cfg[i].high_threshold, jeita_fcc_config.fcc_cfg[i].value);
-	pr_err("    } \n");
-
-	pr_err("sw jeita fv cfg dump: \n");
-	if(jeita_fv_config.psy_prop == POWER_SUPPLY_PROP_TEMP)
-		pr_err("    .psy_prop = POWER_SUPPLY_PROP_TEMP\n");
-	else
-		pr_err("    .psy_prop = unknow\n");
-	pr_err("    .prop_name = %s\n", jeita_fv_config.prop_name);
-	pr_err("    .hysteresis = %d\n", jeita_fv_config.hysteresis);
-	pr_err("    .fv_cfg = { \n");
-	for(i=0;i<MAX_STEP_CHG_ENTRIES; i++)
-		pr_err("        {%d, %d, %d}\n", jeita_fv_config.fv_cfg[i].low_threshold, jeita_fv_config.fv_cfg[i].high_threshold, jeita_fv_config.fv_cfg[i].value);
-	pr_err("    } \n");
-
-
-}
 
 static bool is_batt_available(struct step_chg_info *chip)
 {
@@ -251,6 +197,7 @@ static bool is_batt_available(struct step_chg_info *chip)
 
 	return true;
 }
+
 
 static int get_val(struct range_data *range, int hysteresis, int current_index,
 		int threshold,
@@ -265,6 +212,9 @@ static int get_val(struct range_data *range, int hysteresis, int current_index,
 			range[i].high_threshold, threshold)) {
 			*new_index = i;
 			*val = range[i].value;
+#if defined(CONFIG_TCT_SDM660_COMMON)
+			break;
+#endif
 		}
 
 	/* if nothing was found, return -ENODATA */
@@ -395,7 +345,11 @@ static int handle_jeita(struct step_chg_info *chip)
 				jeita_fcc_config.psy_prop, &pval);
 	if (rc < 0) {
 		pr_err("Couldn't read %s property rc=%d\n",
+#if defined(CONFIG_TCT_SDM660_COMMON)
+				jeita_fcc_config.prop_name, rc);
+#else
 				step_chg_config.prop_name, rc);
+#endif
 		return rc;
 	}
 
@@ -438,7 +392,11 @@ static int handle_jeita(struct step_chg_info *chip)
 	vote(chip->fv_votable, JEITA_VOTER, true, fv_uv);
 
 	pr_debug("%s = %d FCC = %duA FV = %duV\n",
+#if defined(CONFIG_TCT_SDM660_COMMON)
+		jeita_fv_config.prop_name, pval.intval, fcc_ua, fv_uv);
+#else
 		step_chg_config.prop_name, pval.intval, fcc_ua, fv_uv);
+#endif
 
 update_time:
 	chip->jeita_last_update_time = ktime_get();
@@ -449,6 +407,23 @@ reschedule:
 	return (STEP_CHG_HYSTERISIS_DELAY_US - elapsed_us + 1000);
 }
 
+
+#if defined(CONFIG_TCT_SDM660_COMMON)
+static void step_chg_awake(struct step_chg_info *chip, bool request_awake)
+{
+	pr_debug("awake: %d->%d\n", chip->awake_status, request_awake);
+
+	spin_lock(&chip->awake_spinlock);
+	if (!chip->awake_status && request_awake)
+		__pm_stay_awake(chip->step_chg_ws);
+	else if (chip->awake_status && !request_awake)
+		__pm_relax(chip->step_chg_ws);
+
+	chip->awake_status = request_awake;
+	spin_unlock(&chip->awake_spinlock);
+}
+#endif
+
 static void status_change_work(struct work_struct *work)
 {
 	struct step_chg_info *chip = container_of(work,
@@ -457,21 +432,16 @@ static void status_change_work(struct work_struct *work)
 	int reschedule_us;
 	int reschedule_jeita_work_us = 0;
 	int reschedule_step_work_us = 0;
-	union power_supply_propval pval = {0, };
 
-	if (!is_batt_available(chip)) {
-		__pm_relax(chip->step_chg_ws);
+#if defined(CONFIG_TCT_SDM660_COMMON)
+	if (!is_batt_available(chip)) // MODIFIED by jin.wang, 2017-12-22,BUG-5755247
+		goto out;
+#else
+	if (!is_batt_available(chip))
 		return;
-	}
+#endif
 
-	/* skip jeita and step if not charging */
-	rc = power_supply_get_property(chip->batt_psy,
-		POWER_SUPPLY_PROP_STATUS, &pval);
-	if (pval.intval != POWER_SUPPLY_STATUS_CHARGING) {
-		__pm_relax(chip->step_chg_ws);
-		return;
-	}
-
+	/* skip elapsed_us debounce for handling battery temperature */
 	rc = handle_jeita(chip);
 	if (rc > 0)
 		reschedule_jeita_work_us = rc;
@@ -485,11 +455,24 @@ static void status_change_work(struct work_struct *work)
 		pr_err("Couldn't handle step rc = %d\n", rc);
 
 	reschedule_us = min(reschedule_jeita_work_us, reschedule_step_work_us);
+
+#if defined(CONFIG_TCT_SDM660_COMMON)
+	if (reschedule_us) {
+		schedule_delayed_work(&chip->status_change_work,
+				usecs_to_jiffies(reschedule_us));
+		return;
+	}
+
+out:
+	step_chg_awake(chip, false);
+	return;
+#else
 	if (reschedule_us == 0)
 		__pm_relax(chip->step_chg_ws);
 	else
 		schedule_delayed_work(&chip->status_change_work,
 				usecs_to_jiffies(reschedule_us));
+#endif
 }
 
 static int step_chg_notifier_call(struct notifier_block *nb,
@@ -501,10 +484,17 @@ static int step_chg_notifier_call(struct notifier_block *nb,
 	if (ev != PSY_EVENT_PROP_CHANGED)
 		return NOTIFY_OK;
 
+#if defined(CONFIG_TCT_SDM660_COMMON)
+	if (!step_chg_disable && (strcmp(psy->desc->name, "battery") == 0)) {
+		step_chg_awake(chip, true);
+		schedule_delayed_work(&chip->status_change_work, 0);
+	}
+#else
 	if ((strcmp(psy->desc->name, "battery") == 0)) {
 		__pm_stay_awake(chip->step_chg_ws);
 		schedule_delayed_work(&chip->status_change_work, 0);
 	}
+#endif
 
 	return NOTIFY_OK;
 }
@@ -550,7 +540,10 @@ int qcom_step_chg_init(bool step_chg_enable, bool sw_jeita_enable)
 	chip->jeita_fcc_index = -EINVAL;
 	chip->jeita_fv_index = -EINVAL;
 
-	fih_dump_cfg();
+#if defined(CONFIG_TCT_SDM660_COMMON)
+	chip->awake_status = false;
+	spin_lock_init(&chip->awake_spinlock);
+#endif
 
 	if (step_chg_enable && (!step_chg_config.psy_prop ||
 				!step_chg_config.prop_name)) {

@@ -13,7 +13,6 @@
 #ifndef __FG_CORE_H__
 #define __FG_CORE_H__
 
-#include <linux/alarmtimer.h>
 #include <linux/atomic.h>
 #include <linux/bitops.h>
 #include <linux/debugfs.h>
@@ -32,13 +31,24 @@
 #include <linux/uaccess.h>
 #include <linux/pmic-voter.h>
 
+#if defined(CONFIG_TCT_SDM660_COMMON)
+extern int fg_gen3_debug_mask;
 #define fg_dbg(chip, reason, fmt, ...)			\
 	do {							\
-		if (*chip->debug_mask & (reason))		\
-			pr_info(fmt, ##__VA_ARGS__);	\
+		if (chip && (fg_gen3_debug_mask & (reason)))		\
+			pr_err(fmt, ##__VA_ARGS__);	\
 		else						\
 			pr_debug(fmt, ##__VA_ARGS__);	\
 	} while (0)
+#else
+#define fg_dbg(chip, reason, fmt, ...)			\
+	do {							\
+		if (*chip->debug_mask & (reason))		\
+			pr_err(fmt, ##__VA_ARGS__);	\
+		else						\
+			pr_debug(fmt, ##__VA_ARGS__);	\
+	} while (0)
+#endif
 
 #define is_between(left, right, value) \
 		(((left) >= (right) && (left) >= (value) \
@@ -81,15 +91,6 @@
 #define SLOPE_LIMIT_COEFF_MAX		31
 
 #define BATT_THERM_NUM_COEFFS		3
-/* Bobihlee - C1N-667 - [BBS] Porting BBS log for battery and charging */
-#define BBS_LOG 1
-#ifdef BBS_LOG
-#define QPNPCHG_BATTERY_MISSING_ERROR do {printk("BBox;%s: Battery missing\n", __func__); printk("BBox::UEC;11::2\n");} while (0)
-#define QPNPFG_READ_ERROR	do {printk("BBox;%s: fg read failed\n", __func__); printk("BBox::UEC;12::2\n");} while (0)
-#define QPNPFG_WRITE_ERROR	do {printk("BBox;%s: fg write failed\n", __func__); printk("BBox::UEC;12::3\n");} while (0)
-#define QPNPFG_BATTERY_VOLTAGE_LOW do {printk("BBox;%s: Voltage low\n", __func__); printk("BBox::UEC;49::3\n");} while (0)
-#endif
-/* end C1N-667 */
 
 #define MAX_CC_STEPS			20
 
@@ -114,7 +115,7 @@ enum sram_access_flags {
 };
 
 /* JEITA */
-enum jeita_levels {
+enum {
 	JEITA_COLD = 0,
 	JEITA_COOL,
 	JEITA_WARM,
@@ -177,7 +178,6 @@ enum fg_sram_param_id {
 	FG_SRAM_SYS_TERM_CURR,
 	FG_SRAM_CHG_TERM_CURR,
 	FG_SRAM_CHG_TERM_BASE_CURR,
-	FG_SRAM_CUTOFF_CURR,
 	FG_SRAM_DELTA_MSOC_THR,
 	FG_SRAM_DELTA_BSOC_THR,
 	FG_SRAM_RECHARGE_SOC_THR,
@@ -235,12 +235,6 @@ enum slope_limit_status {
 	SLOPE_LIMIT_NUM_COEFFS,
 };
 
-enum esr_filter_status {
-	ROOM_TEMP = 1,
-	LOW_TEMP,
-	RELAX_TEMP,
-};
-
 enum esr_timer_config {
 	TIMER_RETRY = 0,
 	TIMER_MAX,
@@ -264,7 +258,6 @@ struct fg_dt_props {
 	int	chg_term_curr_ma;
 	int	chg_term_base_curr_ma;
 	int	sys_term_curr_ma;
-	int	cutoff_curr_ma;
 	int	delta_soc_thr;
 	int	recharge_soc_thr;
 	int	recharge_volt_thr_mv;
@@ -288,9 +281,6 @@ struct fg_dt_props {
 	int	esr_broad_flt_upct;
 	int	esr_tight_lt_flt_upct;
 	int	esr_broad_lt_flt_upct;
-	int	esr_flt_rt_switch_temp;
-	int	esr_tight_rt_flt_upct;
-	int	esr_broad_rt_flt_upct;
 	int	slope_limit_temp;
 	int	esr_pulse_thresh_ma;
 	int	esr_meas_curr_ma;
@@ -424,8 +414,6 @@ struct fg_chip {
 	struct mutex		bus_lock;
 	struct mutex		sram_rw_lock;
 	struct mutex		charge_full_lock;
-	struct mutex		qnovo_esr_ctrl_lock;
-	spinlock_t		suspend_lock;
 	u32			batt_soc_base;
 	u32			batt_info_base;
 	u32			mem_if_base;
@@ -434,7 +422,6 @@ struct fg_chip {
 	int			batt_id_ohms;
 	int			ki_coeff_full_soc;
 	int			charge_status;
-	int			prev_charge_status;
 	int			charge_done;
 	int			charge_type;
 	int			online_status;
@@ -445,10 +432,8 @@ struct fg_chip {
 	int			delta_soc;
 	int			last_msoc;
 	int			last_recharge_volt_mv;
-	int			delta_temp_irq_count;
 	int			esr_timer_charging_default[NUM_ESR_TIMERS];
 	enum slope_limit_status	slope_limit_sts;
-	enum esr_filter_status	esr_flt_sts;
 	bool			profile_available;
 	bool			profile_loaded;
 	bool			battery_missing;
@@ -461,18 +446,12 @@ struct fg_chip {
 	bool			esr_flt_cold_temp_en;
 	bool			slope_limit_en;
 	bool			use_ima_single_mode;
-	bool			qnovo_enable;
-	bool			suspended;
-	bool 		rsense_rw; // FIHTDC, IdaChiang, add for DRG external sense issue
 	struct completion	soc_update;
 	struct completion	soc_ready;
 	struct delayed_work	profile_load_work;
 	struct work_struct	status_change_work;
 	struct delayed_work	ttf_work;
 	struct delayed_work	sram_dump_work;
-	struct work_struct	esr_filter_work;
-	struct alarm		esr_filter_alarm;
-	ktime_t			last_delta_temp_time;
 };
 
 /* Debugfs data structures are below */
@@ -532,5 +511,4 @@ extern void fg_circ_buf_clr(struct fg_circ_buf *);
 extern int fg_circ_buf_avg(struct fg_circ_buf *, int *);
 extern int fg_circ_buf_median(struct fg_circ_buf *, int *);
 extern int fg_lerp(const struct fg_pt *, size_t, s32, s32 *);
-extern int fg_dma_mem_req(struct fg_chip *, bool);
 #endif

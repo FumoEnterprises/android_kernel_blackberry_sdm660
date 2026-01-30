@@ -264,29 +264,18 @@ static inline bool fg_sram_address_valid(u16 address, int len)
 int fg_sram_write(struct fg_chip *chip, u16 address, u8 offset,
 			u8 *val, int len, int flags)
 {
-	int rc = 0, tries = 0;
+	int rc = 0;
+	bool tried_again = false;
 	bool atomic_access = false;
 
-	if (!chip) {
-		#ifdef BBS_LOG
-			QPNPFG_WRITE_ERROR;
-		#endif
+	if (!chip)
 		return -ENXIO;
-	}
 
-	if (chip->battery_missing) {
-		#ifdef BBS_LOG
-			QPNPFG_WRITE_ERROR;
-		#endif
+	if (chip->battery_missing)
 		return -ENODATA;
-	}
 
-	if (!fg_sram_address_valid(address, len)) {
-		#ifdef BBS_LOG
-			QPNPFG_WRITE_ERROR;
-		#endif
+	if (!fg_sram_address_valid(address, len))
 		return -EFAULT;
-	}
 
 	if (!(flags & FG_IMA_NO_WLOCK))
 		vote(chip->awake_votable, SRAM_WRITE, true, 0);
@@ -303,7 +292,7 @@ int fg_sram_write(struct fg_chip *chip, u16 address, u8 offset,
 	} else {
 		flags = FG_IMA_DEFAULT;
 	}
-
+wait:
 	/*
 	 * Atomic access mean waiting upon SOC_UPDATE interrupt from
 	 * FG_ALG and do the transaction after that. This is to make
@@ -312,20 +301,16 @@ int fg_sram_write(struct fg_chip *chip, u16 address, u8 offset,
 	 * FG cycle (~1.47 seconds).
 	 */
 	if (atomic_access) {
-		for (tries = 0; tries < 2; tries++) {
-			/* Wait for SOC_UPDATE completion */
-			rc = wait_for_completion_interruptible_timeout(
-				&chip->soc_update,
-				msecs_to_jiffies(SOC_UPDATE_WAIT_MS));
-			if (rc > 0) {
-				rc = 0;
-				break;
-			} else if (!rc) {
-				rc = -ETIMEDOUT;
-			}
-		}
+		/* Wait for SOC_UPDATE completion */
+		rc = wait_for_completion_interruptible_timeout(
+			&chip->soc_update,
+			msecs_to_jiffies(SOC_UPDATE_WAIT_MS));
 
-		if (rc < 0) {
+		/* If we were interrupted wait again one more time. */
+		if (rc == -ERESTARTSYS && !tried_again) {
+			tried_again = true;
+			goto wait;
+		} else if (rc <= 0) {
 			pr_err("wait for soc_update timed out rc=%d\n", rc);
 			goto out;
 		}
@@ -336,11 +321,6 @@ int fg_sram_write(struct fg_chip *chip, u16 address, u8 offset,
 	if (rc < 0)
 		pr_err("Error in writing SRAM address 0x%x[%d], rc=%d\n",
 			address, offset, rc);
-
-	#ifdef BBS_LOG
-	if(rc < 0)
-		QPNPFG_WRITE_ERROR;
-	#endif
 out:
 	if (atomic_access)
 		disable_irq_nosync(chip->irqs[SOC_UPDATE_IRQ].irq);
@@ -356,26 +336,14 @@ int fg_sram_read(struct fg_chip *chip, u16 address, u8 offset,
 {
 	int rc = 0;
 
-	if (!chip) {
-		#ifdef BBS_LOG
-			QPNPFG_WRITE_ERROR;
-		#endif
+	if (!chip)
 		return -ENXIO;
-	}
 
-	if (chip->battery_missing) {
-		#ifdef BBS_LOG
-			QPNPFG_WRITE_ERROR;
-		#endif
+	if (chip->battery_missing)
 		return -ENODATA;
-	}
 
-	if (!fg_sram_address_valid(address, len)) {
-		#ifdef BBS_LOG
-			QPNPFG_WRITE_ERROR;
-		#endif
+	if (!fg_sram_address_valid(address, len))
 		return -EFAULT;
-	}
 
 	if (!(flags & FG_IMA_NO_WLOCK))
 		vote(chip->awake_votable, SRAM_READ, true, 0);
@@ -385,11 +353,6 @@ int fg_sram_read(struct fg_chip *chip, u16 address, u8 offset,
 	if (rc < 0)
 		pr_err("Error in reading SRAM address 0x%x[%d], rc=%d\n",
 			address, offset, rc);
-
-	#ifdef BBS_LOG
-	if(rc < 0)
-		QPNPFG_WRITE_ERROR;
-	#endif
 
 	mutex_unlock(&chip->sram_rw_lock);
 	if (!(flags & FG_IMA_NO_WLOCK))
@@ -436,7 +399,13 @@ int fg_read(struct fg_chip *chip, int addr, u8 *val, int len)
 		return rc;
 	}
 
+/* MODIFIED-BEGIN by jin.wang, 2017-12-22,BUG-5755247*/
+#if defined(CONFIG_TCT_SDM660_COMMON)
+	if (fg_gen3_debug_mask & FG_BUS_READ) {
+#else
 	if (*chip->debug_mask & FG_BUS_READ) {
+#endif
+/* MODIFIED-END by jin.wang,BUG-5755247*/
 		pr_info("length %d addr=%04x\n", len, addr);
 		for (i = 0; i < len; i++)
 			pr_info("val[%d]: %02x\n", i, val[i]);
@@ -454,7 +423,7 @@ int fg_write(struct fg_chip *chip, int addr, u8 *val, int len)
 		return -ENXIO;
 
 	mutex_lock(&chip->bus_lock);
-	sec_access = (addr & 0x00FF) >= 0xBA;
+	sec_access = (addr & 0x00FF) > 0xD0;
 	if (sec_access) {
 		rc = regmap_write(chip->regmap, (addr & 0xFF00) | 0xD0, 0xA5);
 		if (rc < 0) {
@@ -475,7 +444,13 @@ int fg_write(struct fg_chip *chip, int addr, u8 *val, int len)
 		goto out;
 	}
 
+/* MODIFIED-BEGIN by jin.wang, 2017-12-22,BUG-5755247*/
+#if defined(CONFIG_TCT_SDM660_COMMON)
+	if (fg_gen3_debug_mask & FG_BUS_WRITE) {
+#else
 	if (*chip->debug_mask & FG_BUS_WRITE) {
+#endif
+/* MODIFIED-END by jin.wang,BUG-5755247*/
 		pr_info("length %d addr=%04x\n", len, addr);
 		for (i = 0; i < len; i++)
 			pr_info("val[%d]: %02x\n", i, val[i]);
@@ -494,7 +469,7 @@ int fg_masked_write(struct fg_chip *chip, int addr, u8 mask, u8 val)
 		return -ENXIO;
 
 	mutex_lock(&chip->bus_lock);
-	sec_access = (addr & 0x00FF) >= 0xBA;
+	sec_access = (addr & 0x00FF) > 0xD0;
 	if (sec_access) {
 		rc = regmap_write(chip->regmap, (addr & 0xFF00) | 0xD0, 0xA5);
 		if (rc < 0) {

@@ -100,10 +100,35 @@ struct reset_attribute {
 module_param_call(download_mode, dload_set, param_get_int,
 			&download_mode, 0644);
 
+#ifdef CONFIG_BBRY
+static bool is_reset_button_combo;
+static bool warm_reset_allowed;
+#ifdef CONFIG_MSM_SUBSYSTEM_RESTART
+extern char subsystem_panic[16];
+static char* subsys_panic = subsystem_panic;
+#endif
+static int get_warm_reset(char *str)
+{
+	if (!strncmp(str, "1", 1))
+		warm_reset_allowed = true;
+	return 1;
+}
+//androidboot.warm_reset is defined in bootchain during board_init
+__setup("androidboot.warm_reset=", get_warm_reset);
+
+enum pon_power_off_type pwr_off_default_type(void)
+{
+	return warm_reset_allowed ? PON_POWER_OFF_WARM_RESET :
+		PON_POWER_OFF_HARD_RESET;
+}
+EXPORT_SYMBOL(pwr_off_default_type);
+#endif
+
 static int panic_prep_restart(struct notifier_block *this,
 			      unsigned long event, void *ptr)
 {
 	in_panic = 1;
+	//sscanf(ptr,"subsys-restart: Resetting the SoC - %s crashed.", subsystem_panic);
 	return NOTIFY_DONE;
 }
 
@@ -271,6 +296,9 @@ static void halt_spmi_pmic_arbiter(void)
 static void msm_restart_prepare(const char *cmd)
 {
 	bool need_warm_reset = false;
+#ifdef CONFIG_BBRY
+	uint8_t   oem_code = 0;
+#endif
 
 #ifdef CONFIG_QCOM_DLOAD_MODE
 
@@ -278,21 +306,40 @@ static void msm_restart_prepare(const char *cmd)
 	 * Write download mode flags if restart_mode says so
 	 * Kill download mode if master-kill switch is set
 	 */
+#ifdef CONFIG_BBRY
+	/* For reset triggered from pre-defined button combo, det dload mode
+	 * and do wdog reset to collect ramdump (similar to log collection
+	 * for kernel panic)
+	 */
+	pr_info("msm_restart_prepare:_cmd=%s\n",cmd);
 
-	set_dload_mode(download_mode &&
-			(in_panic || restart_mode == RESTART_DLOAD));
-#endif
+	qpnp_pon_set_restart_reason(PON_RESTART_REASON_OTHER);
+	__raw_writel(0x77665510,restart_reason);
 
+	if (cmd != NULL && !strncmp(cmd, "two-button", 10)) {
+		is_reset_button_combo = true;
+	} else {
+		is_reset_button_combo = false;
+	}
+	set_dload_mode(download_mode && (in_panic || is_reset_button_combo || restart_mode == RESTART_DLOAD));
+#else
+	set_dload_mode(download_mode && (in_panic || restart_mode == RESTART_DLOAD));
+#endif /* CONFIG_BBRY */
+#endif //CONFIG_QCOM_DLOAD_MODE
+
+#ifdef CONFIG_BBRY
+	if (warm_reset_allowed) {
+		need_warm_reset = (get_dload_mode() || in_panic); //save as much as possible
+	}
+#else
 	if (qpnp_pon_check_hard_reset_stored()) {
 		/* Set warm reset as true when device is in dload mode */
-		if (get_dload_mode() ||
-			((cmd != NULL && cmd[0] != '\0') &&
-			!strcmp(cmd, "edl")))
+		if (get_dload_mode() || ((cmd != NULL && cmd[0] != '\0') && !strcmp(cmd, "edl")))
 			need_warm_reset = true;
 	} else {
-		need_warm_reset = (get_dload_mode() ||
-				(cmd != NULL && cmd[0] != '\0'));
+		need_warm_reset = (get_dload_mode() || (cmd != NULL && cmd[0] != '\0'));
 	}
+#endif
 
 	/* Hard reset the PMIC unless memory contents must be maintained. */
 	if (need_warm_reset) {
@@ -303,59 +350,131 @@ static void msm_restart_prepare(const char *cmd)
 
 	if (cmd != NULL) {
 		if (!strncmp(cmd, "bootloader", 10)) {
-			qpnp_pon_set_restart_reason(
-				PON_RESTART_REASON_BOOTLOADER);
+			qpnp_pon_set_restart_reason(PON_RESTART_REASON_BOOTLOADER);
 			__raw_writel(0x77665500, restart_reason);
 		} else if (!strncmp(cmd, "recovery", 8)) {
-			qpnp_pon_set_restart_reason(
-				PON_RESTART_REASON_RECOVERY);
+			qpnp_pon_set_restart_reason(PON_RESTART_REASON_RECOVERY);
 			__raw_writel(0x77665502, restart_reason);
 		} else if (!strcmp(cmd, "rtc")) {
-			qpnp_pon_set_restart_reason(
-				PON_RESTART_REASON_RTC);
+			qpnp_pon_set_restart_reason(PON_RESTART_REASON_RTC);
 			__raw_writel(0x77665503, restart_reason);
 		} else if (!strcmp(cmd, "dm-verity device corrupted")) {
-			qpnp_pon_set_restart_reason(
-				PON_RESTART_REASON_DMVERITY_CORRUPTED);
+			qpnp_pon_set_restart_reason(PON_RESTART_REASON_DMVERITY_CORRUPTED);
 			__raw_writel(0x77665508, restart_reason);
 		} else if (!strcmp(cmd, "dm-verity enforcing")) {
-			qpnp_pon_set_restart_reason(
-				PON_RESTART_REASON_DMVERITY_ENFORCE);
+			qpnp_pon_set_restart_reason(PON_RESTART_REASON_DMVERITY_ENFORCE);
 			__raw_writel(0x77665509, restart_reason);
 		} else if (!strcmp(cmd, "keys clear")) {
-			qpnp_pon_set_restart_reason(
-				PON_RESTART_REASON_KEYS_CLEAR);
+			qpnp_pon_set_restart_reason(PON_RESTART_REASON_KEYS_CLEAR);
 			__raw_writel(0x7766550a, restart_reason);
-		} else if (!strncmp(cmd, "oem-", 4)) {
+		} else if(!strncmp(cmd,"userrequested",13)) {
+			qpnp_pon_set_restart_reason(PON_RESTART_REASON_UI_USER_REQUESTED);
+			__raw_writel(0x7766550B,restart_reason);
+		} else if (!strncmp(cmd,"deviceowner",11)) {
+			qpnp_pon_set_restart_reason(PON_RESTART_REASON_DEVADMIN);
+			__raw_writel(0x7766550C,restart_reason);
+		} else if (!strncmp(cmd,"adbd",4)) {
+			qpnp_pon_set_restart_reason(PON_RESTART_ADBD);
+			__raw_writel(0x7766550E,restart_reason);
+		} else if(!strncmp(cmd,"Charging disabled",17)) {
+			qpnp_pon_set_restart_reason(PON_RESTART_REASON_HEALTHD_CHG_DISABLED);
+			__raw_writel(0x7766550F,restart_reason);
+		} else if (!strncmp(cmd,"setupfs",7)) {
+			qpnp_pon_set_restart_reason(PON_RESTART_REASON_SETUPFS_RESTART);
+			__raw_writel(0x77665511,restart_reason);
+		} else if(!strncmp(cmd,"charger_mode not enabled, exit",30)) {
+			qpnp_pon_set_restart_reason(PON_RESTART_CHARGER_DISABLED);
+			__raw_writel(0x77665512,restart_reason);
+		} else if(!strncmp(cmd,"SIM is added.",13)) {
+			qpnp_pon_set_restart_reason(PON_RESTART_REASON_SIM_SWAP);
+			__raw_writel(0x77665513,restart_reason);
+		} else if(!strncmp(cmd,"SDRAM Over-temp Emergency restart",33)) {
+			qpnp_pon_set_restart_reason(PON_RESTART_REASON_SDRAM);
+			__raw_writel(0x77665514,restart_reason);
+		}
+#ifdef CONFIG_BBRY
+		 else if (is_reset_button_combo) {
+			qpnp_pon_set_restart_reason(
+				PON_RESTART_REASON_RESET_BUTTON_COMBO);
+			__raw_writel(0x62627673, restart_reason);
+		}
+#endif
+		else if (!strncmp(cmd, "oem-",4)) {
 			unsigned long code;
-			unsigned long reset_reason;
 			int ret;
 			ret = kstrtoul(cmd + 4, 16, &code);
-			if (!ret) {
-				/* Bit-2 to bit-7 of SOFT_RB_SPARE for hard
-				 * reset reason:
-				 * Value 0 to 31 for common defined features
-				 * Value 32 to 63 for oem specific features
-				 */
-				reset_reason = code +
-						PON_RESTART_REASON_OEM_MIN;
-				if (reset_reason > PON_RESTART_REASON_OEM_MAX ||
-				   reset_reason < PON_RESTART_REASON_OEM_MIN) {
-					pr_err("Invalid oem reset reason: %lx\n",
-						reset_reason);
-				} else {
-					qpnp_pon_set_restart_reason(
-						reset_reason);
+			if (!ret){
+				__raw_writel((0x6f656d00 | (code & 0xff)),restart_reason);
+
+#ifdef CONFIG_BBRY
+				oem_code = code & 0xff;
+				if (oem_code >= FIRST_OEM_HARD_RESET) {
+					qpnp_pon_system_pwr_off(PON_POWER_OFF_HARD_RESET);
 				}
-				__raw_writel(0x6f656d00 | (code & 0xff),
-					     restart_reason);
+				qpnp_pon_set_restart_reason(OEM_CODE_TO_PON_RESTART_REASON(oem_code));
 			}
+			else {
+				__raw_writel(0x6F656D00, restart_reason);
+				qpnp_pon_set_restart_reason(PON_RESTART_REASON_UNKNOWN_OEM);
+			}
+#endif
 		} else if (!strncmp(cmd, "edl", 3)) {
+			qpnp_pon_set_restart_reason(PON_RESTART_REASON_EDLOAD);
+			__raw_writel(0x6F656DFF,restart_reason);
 			enable_emergency_dload_mode();
+		} else if (!strncmp(cmd,"safemode",8)) {
+			qpnp_pon_set_restart_reason(PON_RESTART_REASON_SAFEMODE);
+			__raw_writel(0x77665507,restart_reason);
 		} else {
 			__raw_writel(0x77665501, restart_reason);
+#ifdef CONFIG_BBRY
+			pr_info("Please_map_argument_%s_in_msm_restart.\n",cmd);
+			qpnp_pon_set_restart_reason(PON_RESTART_REASON_KERNEL_RESTART_UNKNOWN_ARG);
+#endif
 		}
 	}
+#ifdef CONFIG_BBRY
+	if (in_panic != 0) {
+#ifdef CONFIG_MSM_SUBSYSTEM_RESTART
+		pr_info("subsystem_%s_crash_leading_to_msm_restart.\n", subsystem_panic);
+		if (!memcmp(subsystem_panic, "modem", 5)) {
+			qpnp_pon_set_restart_reason(PON_RESTART_REASON_MODEM);
+			__raw_writel(0x6f656dc1, restart_reason);
+		} else if(strstr(subsys_panic, "zap") != NULL) {
+		  //else if (!memcmp(subsystem_panic, "a512", 4)) {
+			qpnp_pon_set_restart_reason(PON_RESTART_REASON_GPU);
+			__raw_writel(0x6F656DC6, restart_reason);
+		} else if (!memcmp(subsystem_panic, "adsp", 4)) {
+			qpnp_pon_set_restart_reason(PON_RESTART_REASON_ADSP);
+			__raw_writel(0x6f656dc3, restart_reason);
+		} else if (!memcmp(subsystem_panic, "venus", 5)) {
+			qpnp_pon_set_restart_reason(PON_RESTART_REASON_VENUS);
+			__raw_writel(0x6f656dc4, restart_reason);
+		} else if(!memcmp(subsystem_panic, "cdsp", 4)){
+			qpnp_pon_set_restart_reason(PON_RESTART_REASON_CDSP);
+			__raw_writel(0x6f656dc5, restart_reason);
+		} else if(!memcmp(subsystem_panic, "wcnss", 4)){
+			qpnp_pon_set_restart_reason(PON_RESTART_REASON_WCNSS);
+			__raw_writel(0x6F656DC2, restart_reason);
+		} else {
+#endif
+			/* use oem specific code to identify panic */
+			qpnp_pon_set_restart_reason(PON_KERNEL_PANIC_RESET);
+			__raw_writel(0x6f656d01, restart_reason);
+#ifdef CONFIG_MSM_SUBSYSTEM_RESTART
+		}
+#endif
+		if(download_mode) {
+			set_dload_mode(1);
+		}
+	}
+	if ((cmd == NULL) && (in_panic == 0)) {
+		/* use oem specific code to any initiated resets */
+		/* with empty or no known commands. */
+		__raw_writel(0x77665505, restart_reason);
+		qpnp_pon_set_restart_reason(PON_RESTART_REASON_HLOS_RESTART);
+	}
+#endif //CONFIG_BBRY
 
 	flush_cache_all();
 
@@ -401,8 +520,11 @@ static void do_msm_restart(enum reboot_mode reboot_mode, const char *cmd)
 	 * Trigger a watchdog bite here and if this fails,
 	 * device will take the usual restart path.
 	 */
-
+#ifdef CONFIG_BBRY
+	if (WDOG_BITE_ON_PANIC && (in_panic || is_reset_button_combo))
+#else
 	if (WDOG_BITE_ON_PANIC && in_panic)
+#endif
 		msm_trigger_wdog_bite();
 #endif
 
@@ -419,6 +541,9 @@ static void do_msm_poweroff(void)
 
 	set_dload_mode(0);
 	scm_disable_sdi();
+#ifdef CONFIG_BBRY
+	qpnp_pon_set_restart_reason(PON_RESTART_REASON_HLOS_POWER_OFF);
+#endif
 	qpnp_pon_system_pwr_off(PON_POWER_OFF_SHUTDOWN);
 
 	halt_spmi_pmic_arbiter();

@@ -14,4 +14,10 @@
 #define __BATTERY_H
 int qcom_batt_init(void);
 void qcom_batt_deinit(void);
+
+#if defined(CONFIG_TCT_SDM660_COMMON)
+#define QC2_ICL_MAX (1800000)
+#define QC2_FCC_MAX (3000000)
+#endif
+
 #endif /* __BATTERY_H */
