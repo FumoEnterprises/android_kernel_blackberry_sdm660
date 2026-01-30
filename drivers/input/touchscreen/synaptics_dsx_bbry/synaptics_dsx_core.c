@@ -6420,7 +6420,6 @@ static int synaptics_rmi4_set_input_dev(struct synaptics_rmi4_data *rmi4_data)
 	rmi4_data->input_dev->dev.parent = rmi4_data->pdev->dev.parent;
 	input_set_drvdata(rmi4_data->input_dev, rmi4_data);
 
-#ifndef CONFIG_TOUCHSCREEN_SYNAPTICS_DSX_KEYBOARD_TOUCHPAD
 	set_bit(EV_SYN, rmi4_data->input_dev->evbit);
 	set_bit(EV_KEY, rmi4_data->input_dev->evbit);
 	set_bit(EV_ABS, rmi4_data->input_dev->evbit);
@@ -6428,16 +6427,6 @@ static int synaptics_rmi4_set_input_dev(struct synaptics_rmi4_data *rmi4_data)
 	set_bit(BTN_TOOL_FINGER, rmi4_data->input_dev->keybit);
 #ifdef INPUT_PROP_DIRECT
 	set_bit(INPUT_PROP_DIRECT, rmi4_data->input_dev->propbit);
-#endif
-#else
-	set_bit(EV_REL, rmi4_data->input_dev->evbit);
-	set_bit(REL_X, rmi4_data->input_dev->relbit);
-	set_bit(REL_Y, rmi4_data->input_dev->relbit);
-
-	set_bit(EV_KEY, rmi4_data->input_dev->evbit);
-	set_bit(BTN_LEFT, rmi4_data->input_dev->keybit);
-
-	set_bit(INPUT_PROP_POINTER, rmi4_data->input_dev->propbit);
 #endif
 
 	if (rmi4_data->hw_if->board_data->swap_axes) {

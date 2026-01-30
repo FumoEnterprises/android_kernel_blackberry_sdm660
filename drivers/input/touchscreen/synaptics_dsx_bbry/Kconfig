@@ -97,13 +97,4 @@ config TOUCHSCREEN_SYNAPTICS_DSX_ACTIVE_PEN
 	  To compile this driver as a module, choose M here: the
 	  module will be called synaptics_dsx_active_pen.
 
-config TOUCHSCREEN_SYNAPTICS_DSX_KEYBOARD_TOUCHPAD
-    bool "Synaptics DSX as Keyboard touchpad"
-    depends on TOUCHSCREEN_SYNAPTICS_DSX_CORE
-    help
-      Change the events of this driver to become a touchpad and
-      not a touchscreen, as is useful on BlackBerry keyboards.
-
-      If unsure, say N.
-
 endif
