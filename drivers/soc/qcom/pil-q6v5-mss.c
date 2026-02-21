@@ -53,6 +53,7 @@ static struct mp_reasons_t {
 } mpss_crash_reasons[] = {
 	{ "mcfg_utils.c:", "MCFG:Modem Initiated Reset. This crash is expected!!!"},
 	{ "qmi_vs_bbry_svc.c:", "BBRY:AP Initiated Reset"},
+	{ "rfc_lte.cpp:", "init rf devices : Un-supported device type -1."},
 	{NULL, NULL}
 };
 // in some modem reset cases AP side logs are required, we want to invoke AP ramdump
@@ -99,22 +100,30 @@ static void log_modem_sfr(void)
 	pr_err("modem subsystem failure reason: %s.\n", reason);
 #endif
 
-#ifdef CONFIG_BBRY
+	#ifdef CONFIG_BBRY
+	strlcpy(reason, smem_reason, sizeof(reason));
+
 	for (e = mpss_crash_reasons; e->reason; e++) {
-		if ( e->description && strnstr( reason, e->description, min(size, MAX_SSR_REASON_LEN) ) ) {
-			pr_info("modem subsystem failure reason %s is expected. Ramdumps will be suppressed.\n", reason);
+		if (strnstr(reason, e->reason, sizeof(reason)) ||
+			(e->description && strnstr(reason, e->description, sizeof(reason)))) {
+
+			pr_info("modem subsystem failure reason %s is expected. Ramdumps will be suppressed.\n",
+					reason);
 			*indication |= 0x1;
-			break;
-		}
+		break;
+			}
 	}
+
 	for (ea = mpss_crash_init_ap; ea->reason; ea++) {
-		if ( ea->description && strnstr( reason, ea->description, min(size, MAX_SSR_REASON_LEN) ) ) {
-			pr_info("modem subsystem failure reason %s\n due to AP is expected. Ramdumps may be suppressed.", reason);
+		if (ea->description && strnstr(reason, ea->description, sizeof(reason))) {
+			pr_info("modem subsystem failure reason %s\n"
+			"due to AP is expected. Ramdumps may be suppressed.\n",
+		   reason);
 			*indication |= 0x2;
 			break;
 		}
 	}
-#endif
+	#endif
 
 	smem_reason[0] = '\0';
 	wmb();

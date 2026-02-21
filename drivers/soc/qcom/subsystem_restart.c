@@ -1086,6 +1086,15 @@ static void device_restart_work_hdlr(struct work_struct *work)
 							device_restart_work);
 
 	notify_each_subsys_device(&dev, 1, SUBSYS_SOC_RESET, NULL);
+
+	if (dev->supress_ramdump)
+	{
+		pr_err("Expected modem crash. Passing to subsystem reset handler. Have a nice day.\n");
+		dev->restart_level = RESET_SUBSYS_COUPLED;
+		subsystem_restart_dev(dev);
+		return;
+	}
+
 	/*
 	 * Temporary workaround until ramdump userspace application calls
 	 * sync() and fclose() on attempting the dump.
