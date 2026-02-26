@@ -21,7 +21,7 @@
 #include "sdm660-bbry-athena.dtsi" // MODIFIED by hongwei.tian, 2017-08-25,BUG-5156882
 
 / {
-	model = "BlackBerry Key2 (athena)";
+	model = "Qualcomm Technologies, Inc. SDM 660 PM660 + PM660L Int. Audio Codec MTP";
 	compatible = "qcom,sdm660-mtp", "qcom,sdm660", "qcom,mtp";
 	qcom,board-id = <0xDE000008 0>;
 	qcom,pmic-id = <0x0001001b 0x0101011a 0x0 0x0>,
@@ -31,11 +31,4 @@
 &int_codec {
 	qcom,model = "sdm660-snd-card-bbf100"; // MODIFIED by hongwei.tian, 2017-09-20,BUG-5354201
 	status = "okay";
-};
-
-&firmware {
-	android {
-		boot_devices = "soc/c0c4000.sdhci";
-		/delete-node/ fstab;
-	};
 };
