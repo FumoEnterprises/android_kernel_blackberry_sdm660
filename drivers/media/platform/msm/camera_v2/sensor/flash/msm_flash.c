@@ -27,6 +27,7 @@ DEFINE_MSM_MUTEX(msm_flash_mutex);
 
 static struct v4l2_file_operations msm_flash_v4l2_subdev_fops;
 static struct led_trigger *torch_trigger;
+static bool torch_classdev_ready;
 
 static const struct of_device_id msm_flash_dt_match[] = {
 	{.compatible = "qcom,camera-flash", .data = NULL},
@@ -62,6 +63,9 @@ void msm_torch_brightness_set(struct led_classdev *led_cdev,
 		pr_err("No torch trigger found, can't set brightness\n");
 		return;
 	}
+
+	if (!torch_classdev_ready && value == LED_OFF)
+		return;
 
 	led_trigger_event(torch_trigger, value);
 };
@@ -118,6 +122,7 @@ static int32_t msm_torch_create_classdev(struct platform_device *pdev,
 		}
 	}
 
+	torch_classdev_ready = true;
 	return 0;
 };
 
@@ -621,14 +626,24 @@ static int32_t msm_flash_low(
 		if (flash_ctrl->flash_trigger[i])
 			led_trigger_event(flash_ctrl->flash_trigger[i], 0);
 
-	/* Turn on flash triggers */
+	/* Turn on torch triggers */
 	for (i = 0; i < flash_ctrl->torch_num_sources; i++) {
 		if (flash_ctrl->torch_trigger[i]) {
 			max_current = flash_ctrl->torch_max_current[i];
-			if (flash_data->flash_current[i] >= 0 &&
+			/*
+			 * Dual LED fix: HAL only sets flash_current[0],
+			 * mirror to other LEDs for balanced dual-tone output.
+			 */
+			if (flash_data->flash_current[i] > 0 &&
 				flash_data->flash_current[i] <
 				max_current) {
 				curr = flash_data->flash_current[i];
+			} else if (i > 0 &&
+				flash_data->flash_current[i] == 0 &&
+				flash_data->flash_current[0] > 0) {
+				curr = flash_data->flash_current[0];
+				if (curr >= max_current)
+					curr = flash_ctrl->torch_op_current[i];
 			} else {
 				curr = flash_ctrl->torch_op_current[i];
 				pr_debug("LED current clamped to %d\n",
@@ -662,10 +677,20 @@ static int32_t msm_flash_high(
 	for (i = 0; i < flash_ctrl->flash_num_sources; i++) {
 		if (flash_ctrl->flash_trigger[i]) {
 			max_current = flash_ctrl->flash_max_current[i];
-			if (flash_data->flash_current[i] >= 0 &&
+			/*
+			 * Dual LED fix: HAL only sets flash_current[0],
+			 * mirror to other LEDs for balanced dual-tone output.
+			 */
+			if (flash_data->flash_current[i] > 0 &&
 				flash_data->flash_current[i] <
 				max_current) {
 				curr = flash_data->flash_current[i];
+			} else if (i > 0 &&
+				flash_data->flash_current[i] == 0 &&
+				flash_data->flash_current[0] > 0) {
+				curr = flash_data->flash_current[0];
+				if (curr >= max_current)
+					curr = flash_ctrl->flash_op_current[i];
 			} else {
 				curr = flash_ctrl->flash_op_current[i];
 				pr_debug("LED flash_current[%d] clamped %d\n",
@@ -755,6 +780,11 @@ static int32_t msm_flash_config(struct msm_flash_ctrl_t *flash_ctrl,
 				flash_ctrl->flash_state);
 		}
 		break;
+	case CFG_FLASH_MITIGATION_LEVELS:
+		/* BlackBerry thermal mitigation - no-op for now */
+		break;
+	case CFG_TORCH_ON:
+		/* falls through to CFG_FLASH_LOW */
 	case CFG_FLASH_LOW:
 		if ((flash_ctrl->flash_state == MSM_CAMERA_FLASH_OFF) ||
 			(flash_ctrl->flash_state == MSM_CAMERA_FLASH_INIT)) {
@@ -1185,6 +1215,7 @@ static long msm_flash_subdev_do_ioctl(
 		cmd = VIDIOC_MSM_FLASH_CFG;
 		switch (flash_data.cfg_type) {
 		case CFG_FLASH_OFF:
+		case CFG_TORCH_ON:
 		case CFG_FLASH_LOW:
 		case CFG_FLASH_HIGH:
 			flash_data.cfg.settings = compat_ptr(u32->cfg.settings);

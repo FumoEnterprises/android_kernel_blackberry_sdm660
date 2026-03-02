@@ -26,11 +26,11 @@
 	static struct mutex mutexname = __MUTEX_INITIALIZER(mutexname)
 
 enum msm_camera_flash_state_t {
+	MSM_CAMERA_FLASH_RELEASE,
 	MSM_CAMERA_FLASH_INIT,
 	MSM_CAMERA_FLASH_OFF,
 	MSM_CAMERA_FLASH_LOW,
 	MSM_CAMERA_FLASH_HIGH,
-	MSM_CAMERA_FLASH_RELEASE,
 };
 
 struct msm_flash_ctrl_t;

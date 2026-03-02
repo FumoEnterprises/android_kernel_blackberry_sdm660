@@ -43,7 +43,7 @@
 #define MAX_ACTUATOR_INIT_SET     120
 #define MAX_I2C_REG_SET           12
 
-#define MAX_LED_TRIGGERS          3
+#define MAX_LED_TRIGGERS          4
 
 #define MSM_EEPROM_MEMORY_MAP_MAX_SIZE  80
 #define MSM_EEPROM_MAX_MEM_MAP_CNT      8
@@ -187,6 +187,8 @@ enum msm_flash_cfg_type_t {
 	CFG_FLASH_INIT,
 	CFG_FLASH_RELEASE,
 	CFG_FLASH_OFF,
+	CFG_FLASH_MITIGATION_LEVELS,
+	CFG_TORCH_ON,
 	CFG_FLASH_LOW,
 	CFG_FLASH_HIGH,
 };

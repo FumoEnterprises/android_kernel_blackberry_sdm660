@@ -587,6 +587,8 @@ static int32_t msm_actuator_move_focus(
 	struct msm_camera_i2c_reg_setting reg_setting;
 
 	CDBG("called, dir %d, num_steps %d\n", dir, num_steps);
+	pr_err("msm_actuator_move_focus: dir=%d dest_step=%d curr_step=%d total_steps=%d\n",
+		dir, dest_step_pos, a_ctrl->curr_step_pos, a_ctrl->total_steps);
 
 	if (a_ctrl->step_position_table == NULL) {
 		pr_err("Step Position Table is NULL\n");
@@ -721,6 +723,9 @@ static int32_t msm_actuator_bivcm_move_focus(
 	}
 
 	CDBG("called, dir %d, num_steps %d\n", dir, num_steps);
+	pr_err("bivcm_move_focus: dir=%d dest_step=%d curr_step=%d total_steps=%d lens_pos=%d\n",
+		dir, dest_step_pos, a_ctrl->curr_step_pos, a_ctrl->total_steps,
+		a_ctrl->step_position_table[a_ctrl->curr_step_pos]);
 
 	if (dest_step_pos == a_ctrl->curr_step_pos)
 		return rc;
@@ -970,6 +975,14 @@ static int32_t msm_actuator_bivcm_init_step_table(
 				a_ctrl->step_position_table[step_index]);
 		}
 	}
+	pr_err("bivcm_init_step: total_steps=%d initial_code=%d max_code=%u "
+		"step_pos[0]=%d step_pos[%d]=%d\n",
+		set_info->af_tuning_params.total_steps,
+		set_info->af_tuning_params.initial_code,
+		a_ctrl->max_code_size,
+		a_ctrl->step_position_table[0],
+		set_info->af_tuning_params.total_steps,
+		a_ctrl->step_position_table[set_info->af_tuning_params.total_steps]);
 	CDBG("Exit\n");
 	return 0;
 }
@@ -1212,6 +1225,9 @@ static int32_t msm_actuator_set_position(
 	for (index = 0; index < set_pos->number_of_steps; index++) {
 		next_lens_position = set_pos->pos[index];
 		delay = set_pos->delay[index];
+		pr_err("msm_actuator_set_position: step %d/%d pos=%u delay=%u\n",
+			index, set_pos->number_of_steps,
+			next_lens_position, delay);
 		a_ctrl->func_tbl->actuator_parse_i2c_params(a_ctrl,
 			next_lens_position, hw_params, delay);
 
@@ -1265,6 +1281,9 @@ static int32_t msm_actuator_bivcm_set_position(
 	for (index = 0; index < set_pos->number_of_steps; index++) {
 		next_lens_position = set_pos->pos[index];
 		delay = set_pos->delay[index];
+		pr_err("bivcm_set_position: step %d/%d pos=%u delay=%u\n",
+			index, set_pos->number_of_steps,
+			next_lens_position, delay);
 		rc = msm_actuator_bivcm_handle_i2c_ops(a_ctrl,
 		next_lens_position, hw_params, delay);
 		a_ctrl->i2c_tbl_index = 0;
@@ -1409,6 +1428,18 @@ static int32_t msm_actuator_set_param(struct msm_actuator_ctrl_t *a_ctrl,
 
 	a_ctrl->curr_step_pos = 0;
 	a_ctrl->curr_region_index = 0;
+	pr_err("msm_actuator_set_param: act_type=%d total_steps=%d region_size=%d initial_code=%d\n",
+		set_info->actuator_params.act_type,
+		a_ctrl->total_steps, a_ctrl->region_size, a_ctrl->initial_code);
+	{
+		int _r;
+		for (_r = 0; _r < a_ctrl->region_size; _r++)
+			pr_err("  region[%d]: step_bound=[%u,%u] code_per_step=%u qvalue=%u\n",
+				_r, a_ctrl->region_params[_r].step_bound[0],
+				a_ctrl->region_params[_r].step_bound[1],
+				a_ctrl->region_params[_r].code_per_step,
+				a_ctrl->region_params[_r].qvalue);
+	}
 	CDBG("Exit\n");
 
 	return rc;
@@ -1442,6 +1473,8 @@ static int32_t msm_actuator_config(struct msm_actuator_ctrl_t *a_ctrl,
 	mutex_lock(a_ctrl->actuator_mutex);
 	CDBG("Enter\n");
 	CDBG("%s type %d\n", __func__, cdata->cfgtype);
+	pr_err("msm_actuator_config: cfg_type=%d state=%d\n",
+		cdata->cfgtype, a_ctrl->actuator_state);
 
 	if (cdata->cfgtype != CFG_ACTUATOR_INIT &&
 		cdata->cfgtype != CFG_ACTUATOR_POWERUP &&
@@ -1508,10 +1541,15 @@ static int32_t msm_actuator_config(struct msm_actuator_ctrl_t *a_ctrl,
 		break;
 
 	default:
+		pr_err("msm_actuator_config: UNKNOWN cfg_type=%d\n",
+			cdata->cfgtype);
 		break;
 	}
 	mutex_unlock(a_ctrl->actuator_mutex);
 	CDBG("Exit\n");
+	if (rc < 0)
+		pr_err("msm_actuator_config: cfg_type=%d FAILED rc=%d\n",
+			cdata->cfgtype, rc);
 	return rc;
 }
 

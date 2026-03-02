@@ -47,7 +47,7 @@ ifeq ($(CONFIG_COMPAT_VDSO), y)
     $(error CROSS_COMPILE_ARM32 not defined or empty, the compat vDSO will not be built)
   else ifeq ($(cc-name),clang)
     export CLANG_TRIPLE_ARM32 ?= $(CROSS_COMPILE_ARM32)
-    export CLANG_TARGET_ARM32 := --target=arm-linux-gnueabi
+    export CLANG_TARGET_ARM32 := --target=$(notdir $(CLANG_TRIPLE_ARM32:%-=%))
     export CONFIG_VDSO32 := y
     vdso32 := -DCONFIG_VDSO32=1
   else ifeq ($(shell which $(CROSS_COMPILE_ARM32)$(cc-name) 2> /dev/null),)
@@ -164,7 +164,6 @@ Image-dtb Image.gz-dtb: vmlinux scripts dtbs
 PHONY += vdso_install
 vdso_install:
 	$(Q)$(MAKE) $(build)=arch/arm64/kernel/vdso $@
-	$(Q)$(MAKE) $(build)=arch/arm64/kernel/vdso32 $@
 
 # We use MRPROPER_FILES and CLEAN_FILES now
 archclean:
