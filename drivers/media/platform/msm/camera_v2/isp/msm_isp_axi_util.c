@@ -696,6 +696,16 @@ void msm_isp_process_reg_upd_epoch_irq(struct vfe_device *vfe_dev,
 				}
 				msm_isp_update_framedrop_reg(stream_info,
 					drop_reconfig);
+			/* Auto-clear drop_reconfig after EPOCH
+			 * processes it -- MCT never clears via
+			 * mmap'd page, causing infinite cascade
+			 * of OUTPUT_ERROR on BLOB streams */
+			if (drop_reconfig) {
+				vfe_dev->isp_page->drop_reconfig = 0;
+				if (temp)
+					temp->isp_page->drop_reconfig
+						= 0;
+			}
 			}
 			break;
 		default:
@@ -3615,7 +3625,7 @@ static int msm_isp_request_frame(struct vfe_device *vfe_dev,
 
 	/* As MCT is still processing it, need to drop the additional requests*/
 	if (vfe_dev->isp_page->drop_reconfig) {
-		pr_err("%s: MCT has not yet delayed %d drop request %d\n",
+		pr_err_ratelimited("%s: MCT has not yet delayed %d drop request %d\n",
 			__func__, vfe_dev->isp_page->drop_reconfig, frame_id);
 		goto error;
 	}
