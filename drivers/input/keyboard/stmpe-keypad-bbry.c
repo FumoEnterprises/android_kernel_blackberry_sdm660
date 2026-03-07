@@ -247,7 +247,7 @@ struct stmpe_keypad {
 
 	// Modifiers
 	enum modifiers curr_mod;
-	uint8_t mod_key_table[KEYPAD_MAX_ROWS][KEYPAD_MAX_COLS];
+	uint8_t mod_key_table[KEYPAD_LAYOUT_ROWS][KEYPAD_LAYOUT_COLS];
 	uint8_t mod_1_layout_table[KEYPAD_LAYOUT_ROWS][KEYPAD_LAYOUT_COLS];
 
 	// Alt modifier
