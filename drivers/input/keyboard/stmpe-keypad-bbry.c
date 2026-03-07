@@ -94,7 +94,7 @@
 #endif
 
 /* TEMP */
-#define debug(str, args...) dev_err(&keypad->i2c_client->dev, "%s: " str "\n", __func__, ##args)
+#define debug(str, args...) //dev_err(&keypad->i2c_client->dev, "%s: " str "\n", __func__, ##args)
 #define info(str, args...) dev_err(&keypad->i2c_client->dev, "%s: " str "\n", __func__, ##args)
 #define warn(str, args...) dev_err(&keypad->i2c_client->dev, "%s: " str "\n", __func__, ##args)
 #define error(str, args...) dev_err(&keypad->i2c_client->dev, "%s: " str "\n", __func__, ##args)
@@ -1136,8 +1136,6 @@ EXPORT_SYMBOL(get_stmpe_keypad_status);
 static uint8_t stmpe_get_modifier_key(struct stmpe_keypad *keypad,
 									  struct key_event_data key_data)
 {
-	debug("alt held: %i alt sticky %i", keypad->alt_held, keypad->alt_sticky);
-
 	if (!keypad->alt_held && !keypad->alt_sticky)
 		return key_data.key;
 
