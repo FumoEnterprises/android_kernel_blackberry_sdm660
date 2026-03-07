@@ -12,6 +12,9 @@
  */
 
 /* MODIFIED-BEGIN by Haojun Chen, 2017-08-09,BUG-5162384*/
+
+#include <dt-bindings/input/input.h>
+
 #include "dsi-panel-livata-video.dtsi"
 #include "dsi-panel-synaptics-video.dtsi"
 
@@ -268,15 +271,78 @@
 			st,key-count = <0x0e>;
 			pinctrl-names = "default";
 			pinctrl-0 = <&keypad_int_default>;
-			linux,keymap = <0x3010010 0x3070011 0x4010012 0x5010013
-					0x5040014 0x6040015 0x6010016 0x7040017
-					0x7010018 0x4020019 0x304001e 0x407001f
-					0x4040020 0x5050021 0x5070022 0x6070023
-					0x6050024 0x7050025 0x7070026 0x702000e
-					0x3060038 0x400002c 0x406002d 0x500002e
-					0x506002f 0x6060030 0x6000031 0x7000032
-					0x7060005 0x602001c 0x405002a 0x305000b
-					0x3000039 0x3020064 0x502006e>;
+			linux,keymap = <MATRIX_KEY(0x03, 0x01, KEY_Q)
+							MATRIX_KEY(0x03, 0x07, KEY_W)
+							MATRIX_KEY(0x04, 0x01, KEY_E)
+							MATRIX_KEY(0x05, 0x01, KEY_R)
+							MATRIX_KEY(0x05, 0x04, KEY_T)
+							MATRIX_KEY(0x06, 0x04, KEY_Y)
+							MATRIX_KEY(0x06, 0x01, KEY_U)
+							MATRIX_KEY(0x07, 0x04, KEY_I)
+							MATRIX_KEY(0x07, 0x01, KEY_O)
+							MATRIX_KEY(0x04, 0x02, KEY_P)
+							MATRIX_KEY(0x03, 0x04, KEY_A)
+							MATRIX_KEY(0x04, 0x07, KEY_S)
+							MATRIX_KEY(0x04, 0x04, KEY_D)
+							MATRIX_KEY(0x05, 0x05, KEY_F)
+							MATRIX_KEY(0x05, 0x07, KEY_G)
+							MATRIX_KEY(0x06, 0x07, KEY_H)
+							MATRIX_KEY(0x06, 0x05, KEY_J)
+							MATRIX_KEY(0x07, 0x05, KEY_K)
+							MATRIX_KEY(0x07, 0x07, KEY_L)
+							MATRIX_KEY(0x07, 0x02, KEY_BACKSPACE)
+							MATRIX_KEY(0x03, 0x06, KEY_RESERVED) // Alt
+							MATRIX_KEY(0x04, 0x00, KEY_Z)
+							MATRIX_KEY(0x04, 0x06, KEY_X)
+							MATRIX_KEY(0x05, 0x00, KEY_C)
+							MATRIX_KEY(0x05, 0x06, KEY_V)
+							MATRIX_KEY(0x06, 0x06, KEY_B)
+							MATRIX_KEY(0x06, 0x00, KEY_N)
+							MATRIX_KEY(0x07, 0x00, KEY_M)
+							MATRIX_KEY(0x07, 0x06, KEY_4)
+							MATRIX_KEY(0x06, 0x02, KEY_ENTER)
+							MATRIX_KEY(0x04, 0x05, KEY_LEFTSHIFT)
+							MATRIX_KEY(0x03, 0x05, KEY_F10)
+							MATRIX_KEY(0x03, 0x00, KEY_SPACE)
+							MATRIX_KEY(0x03, 0x02, KEY_RIGHTALT) // Symbol picker
+							MATRIX_KEY(0x05, 0x02, KEY_RIGHTCTRL)>;
+
+			st,modifier_keycodes = <MATRIX_KEY(0x03, 0x06, KEY_LEFTALT)>;
+			st,mod_layout_1_keycodes = <MATRIX_KEY(0x03, 0x01, KEY_F1)
+										MATRIX_KEY(0x03, 0x07, KEY_1)
+										MATRIX_KEY(0x04, 0x01, KEY_2)
+										MATRIX_KEY(0x05, 0x01, KEY_3)
+										MATRIX_KEY(0x05, 0x04, KEY_F2)
+										MATRIX_KEY(0x06, 0x04, KEY_F3)
+										MATRIX_KEY(0x06, 0x01, KEY_F4)
+										MATRIX_KEY(0x07, 0x04, KEY_KPMINUS)
+										MATRIX_KEY(0x07, 0x01, KEY_KPPLUS)
+										MATRIX_KEY(0x04, 0x02, KEY_F5)
+										MATRIX_KEY(0x03, 0x04, KEY_KPASTERISK)
+										MATRIX_KEY(0x04, 0x07, KEY_4)
+										MATRIX_KEY(0x04, 0x04, KEY_5)
+										MATRIX_KEY(0x05, 0x05, KEY_6)
+										MATRIX_KEY(0x05, 0x07, KEY_SLASH)
+										MATRIX_KEY(0x06, 0x07, KEY_F6)
+										MATRIX_KEY(0x06, 0x05, KEY_SEMICOLON)
+										MATRIX_KEY(0x07, 0x05, KEY_APOSTROPHE)
+										MATRIX_KEY(0x07, 0x07, KEY_F7)
+										MATRIX_KEY(0x07, 0x02, KEY_BACKSPACE)
+										MATRIX_KEY(0x03, 0x06, KEY_LEFTALT)
+										MATRIX_KEY(0x04, 0x00, KEY_7)
+										MATRIX_KEY(0x04, 0x06, KEY_8)
+										MATRIX_KEY(0x05, 0x00, KEY_9)
+										MATRIX_KEY(0x05, 0x06, KEY_QUESTION)
+										MATRIX_KEY(0x06, 0x06, KEY_F8)
+										MATRIX_KEY(0x06, 0x00, KEY_COMMA)
+										MATRIX_KEY(0x07, 0x00, KEY_DOT)
+										MATRIX_KEY(0x07, 0x06, KEY_F9)
+										MATRIX_KEY(0x06, 0x02, KEY_F11)
+										MATRIX_KEY(0x04, 0x05, KEY_LEFTSHIFT)
+										MATRIX_KEY(0x03, 0x05, KEY_0)
+										MATRIX_KEY(0x03, 0x00, KEY_SPACE)
+										MATRIX_KEY(0x03, 0x02, KEY_RIGHTALT)
+										MATRIX_KEY(0x05, 0x02, KEY_RIGHTCTRL)>;
 			st,physical_keymap = <0x1010010 0x1020011 0x1030012 0x1040013
 					0x1050014 0x1060015 0x1070016 0x1080017
 					0x1090018 0x10a0019 0x201001e 0x202001f

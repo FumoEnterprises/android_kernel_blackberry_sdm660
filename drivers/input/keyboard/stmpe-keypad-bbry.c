@@ -85,6 +85,7 @@
 #endif
 #define KEYPAD_MAX_ADJACENT		6
 #define KEYPAD_MAX_KEYS			255
+#define KEYPAD_MAX_MOD_KEYS			8
 #define KEYPAD_EVENT_LOG_SIZE		100
 #define KEYPAD_MAX_KEY_WIDTH		4
 #define KEY_EVENT_FIFO_SIZE	10
@@ -93,7 +94,7 @@
 #endif
 
 /* TEMP */
-#define debug(str, args...) /* dev_err(&keypad->i2c_client->dev, "%s: " str "\n", __func__, ##args)*/
+#define debug(str, args...) dev_err(&keypad->i2c_client->dev, "%s: " str "\n", __func__, ##args)
 #define info(str, args...) dev_err(&keypad->i2c_client->dev, "%s: " str "\n", __func__, ##args)
 #define warn(str, args...) dev_err(&keypad->i2c_client->dev, "%s: " str "\n", __func__, ##args)
 #define error(str, args...) dev_err(&keypad->i2c_client->dev, "%s: " str "\n", __func__, ##args)
@@ -113,6 +114,7 @@ struct key_data {
 	bool wake;
 	int adjacent_detected;
 	int inadvertent;
+	uint8_t translated;
 };
 
 enum display_state {
@@ -170,6 +172,11 @@ struct key_timing up_time[] = {
 	{0, 160, "next key press within 180 ms"},
 	{0, 180, "next key press within 200 ms"},
 	{0, 200, "next key press after 200 ms"}
+};
+
+enum modifiers {
+	MOD_NONE,
+	MOD_ALT
 };
 
 struct stmpe_keypad {
@@ -234,6 +241,16 @@ struct stmpe_keypad {
 		int interrupt_polarity;
 		bool edge_interrupt;
 	} config;
+
+	// Modifiers
+	enum modifiers curr_mod;
+	uint8_t mod_key_table[KEYPAD_MAX_ROWS][KEYPAD_MAX_COLS];
+	uint8_t mod_1_layout_table[KEYPAD_MAX_ROWS][KEYPAD_MAX_COLS];
+
+	// Alt modifier
+	bool alt_held;
+	bool alt_sticky;
+	bool alt_used_while_held;
 };
 
 const static char *keypad_name[] = {
@@ -1115,6 +1132,18 @@ int get_stmpe_keypad_status(void)
 }
 EXPORT_SYMBOL(get_stmpe_keypad_status);
 #endif
+
+static uint8_t stmpe_get_modifier_key(struct stmpe_keypad *keypad,
+									  struct key_event_data key_data)
+{
+	debug("alt held: %i alt sticky %i", keypad->alt_held, keypad->alt_sticky);
+
+	if (!keypad->alt_held && !keypad->alt_sticky)
+		return key_data.key;
+
+	return keypad->mod_1_layout_table[key_data.row][key_data.col];
+}
+
 int stmpe_inject_key(struct stmpe_keypad *keypad, uint8_t key,
 						key_event_type_t type)
 {
@@ -1145,6 +1174,7 @@ int stmpe_inject_key(struct stmpe_keypad *keypad, uint8_t key,
 		}
 	}
 #endif
+
 	input_event(keypad->input_dev, EV_MSC, MSC_SCAN,
 					keypad->keys[key].code);
 	input_report_key(keypad->input_dev, key, type);
@@ -1204,12 +1234,29 @@ int stmpe_handle_keypress(struct stmpe_keypad *keypad)
 		}
 
 		for (i = 0; i < num_events; i++) {
-			inject_key = true;
+			inject_key = false;
 			adjacent_key = 0;
 
 			debug("key:0x%X %s row:%d col:%d", key_data[i].key,
 				(key_data[i].type == KEY_EVENT_UP ? "UP" : "DOWN"),
 					key_data[i].row, key_data[i].col);
+
+			if (keypad->mod_key_table[key_data[i].row][key_data[i].col] == KEY_LEFTALT) {
+				if (key_data[i].type == KEY_EVENT_DOWN) {
+					keypad->alt_held = true;
+					keypad->alt_used_while_held = false;
+				} else {
+					keypad->alt_held = false;
+
+					if (!keypad->alt_used_while_held)
+						keypad->alt_sticky = !keypad->alt_sticky;
+				}
+
+				inject_key = false;
+			}
+			else {
+				inject_key = true;
+			}
 
 			if (key_data[i].type == KEY_EVENT_DOWN) {
 				pressed++;
@@ -1252,9 +1299,29 @@ int stmpe_handle_keypress(struct stmpe_keypad *keypad)
 					key_data[i].type);
 
 			if (inject_key) {
+				if (key_data[i].type == KEY_EVENT_DOWN) {
+					uint8_t translated;
+
+					if (keypad->alt_held) {
+						keypad->alt_used_while_held = true;
+					}
+
+					translated = stmpe_get_modifier_key(keypad, key_data[i]);
+					keypad->keys[key_data[i].code].translated = translated;
+					key_data[i].key = translated;
+
+					/* sticky ALT consumed */
+					if (keypad->alt_sticky && !keypad->alt_held)
+						keypad->alt_sticky = false;
+
+				} else {
+					key_data[i].key =
+					keypad->keys[key_data[i].code].translated;
+				}
+
 				stmpe_inject_key(keypad,
-						key_data[i].key,
-						key_data[i].type);
+								 key_data[i].key,
+					 key_data[i].type);
 			}
 
 			do_gettimeofday(&keypad->last_keypress);
@@ -1279,10 +1346,11 @@ int stmpe_handle_keypress(struct stmpe_keypad *keypad)
 	return ret;
 }
 
-
 static int stmpe_keypad_process_events(struct stmpe_keypad *keypad)
 {
 	int status, ret = 0;
+
+	error("IRQ2");
 
 	mutex_lock(&keypad->keypad_mutex);
 	/* Read the interrupt status */
@@ -1315,6 +1383,8 @@ static irqreturn_t stmpe_keypad_irq_handler(int irq, void *dev)
 {
 	struct stmpe_keypad *keypad = dev;
 	int ret;
+
+	error("IRQ1");
 
 	keypad->counters.interrupts++;
 	pm_stay_awake(&keypad->i2c_client->dev);
@@ -1713,7 +1783,6 @@ static int stmpe_keypad_parse_dt(struct device *dev,
 			key = be32_to_cpup(prop_data + i);
 			keypad->keys[key].modifier = true;
 		}
-
 	}
 
 	prop_data = of_get_property(np, "st,key-count", &prop_data_len);
@@ -1729,6 +1798,56 @@ static int stmpe_keypad_parse_dt(struct device *dev,
 		}
 	}
 
+	prop_data = of_get_property(np, "st,modifier_keycodes", &prop_data_len);
+	if (prop_data != NULL) {
+		if (prop_data_len % sizeof(u32)) {
+			error("Malformed modifier keycode table");
+			return -EINVAL;
+		}
+
+		size = prop_data_len / sizeof(u32);
+		if (size > KEYPAD_MAX_MOD_KEYS) {
+			error("modifier keycode table overflow");
+			return -EINVAL;
+		}
+
+		for (i = 0; i < size; i++) {
+			key = be32_to_cpup(prop_data + i);
+			row = KEY_ROW(key);
+			col = KEY_COL(key);
+			error("mod: writing to table row: %i col: %i modifier key\n", row, col);
+			keypad->mod_key_table[row][col] = KEY_VAL(key);
+			error("keypad->mod_key_table[%i][%i] = %i\n", row, col, KEY_VAL(key));
+		}
+	} else {
+		info("No modifier keycode table.");
+	}
+
+	prop_data = of_get_property(np, "st,mod_layout_1_keycodes", &prop_data_len);
+	if (prop_data != NULL) {
+		if (prop_data_len % sizeof(u32)) {
+			error("Malformed modifier 1 layout table");
+			return -EINVAL;
+		}
+
+		size = prop_data_len / sizeof(u32);
+		if (size > KEYPAD_MAX_KEYS) {
+			error("modifier 1 layout table overflow");
+			return -EINVAL;
+		}
+
+		for (i = 0; i < size; i++) {
+			key = be32_to_cpup(prop_data + i);
+			row = KEY_ROW(key);
+			col = KEY_COL(key);
+			error("mod: writing to table row: %i col: %i modifier key\n", row, col);
+			keypad->mod_1_layout_table[row][col] = KEY_VAL(key);
+			error("keypad->mod_1_layout_table[%i][%i] = %i\n", row, col, KEY_VAL(key));
+		}
+	} else {
+		info("No modifier 1 layout table.");
+	}
+
 	return 0;
 }
 
@@ -1737,7 +1856,7 @@ static int stmpe_keypad_probe(struct i2c_client *i2c,
 {
 	struct stmpe_keypad *keypad;
 	int ret;
-	int i, n;
+	int i, n, r, c;
 	int retry;
 
 	pr_err("%s:ENTRY\n", __func__);
@@ -1951,6 +2070,19 @@ static int stmpe_keypad_probe(struct i2c_client *i2c,
 			}
 		}
 	}
+
+	for (r = 0; r < KEYPAD_KEYMAP_ROWS; r++) {
+		for (c = 0; c < KEYPAD_KEYMAP_COLS; c++) {
+			u16 code = keypad->mod_1_layout_table[r][c];
+
+			if (code != KEY_RESERVED)
+				input_set_capability(keypad->input_dev, EV_KEY, code);
+		}
+	}
+
+	keypad->alt_held = 0;
+	keypad->alt_sticky = 0;
+	keypad->alt_used_while_held = 0;
 
 	/* Create input handler for slide events */
 	input_event_handler.private = keypad;
