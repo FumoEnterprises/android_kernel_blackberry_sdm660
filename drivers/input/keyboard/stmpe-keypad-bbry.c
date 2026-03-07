@@ -93,6 +93,9 @@
 #ifdef CONFIG_STMPE_KEYPAD_DDT
 #endif
 
+#define KEYPAD_LAYOUT_ROWS	8
+#define KEYPAD_LAYOUT_COLS	8
+
 /* TEMP */
 #define debug(str, args...) //dev_err(&keypad->i2c_client->dev, "%s: " str "\n", __func__, ##args)
 #define info(str, args...) dev_err(&keypad->i2c_client->dev, "%s: " str "\n", __func__, ##args)
@@ -245,7 +248,7 @@ struct stmpe_keypad {
 	// Modifiers
 	enum modifiers curr_mod;
 	uint8_t mod_key_table[KEYPAD_MAX_ROWS][KEYPAD_MAX_COLS];
-	uint8_t mod_1_layout_table[KEYPAD_MAX_ROWS][KEYPAD_MAX_COLS];
+	uint8_t mod_1_layout_table[KEYPAD_LAYOUT_ROWS][KEYPAD_LAYOUT_COLS];
 
 	// Alt modifier
 	bool alt_held;
@@ -731,9 +734,6 @@ static int read_block(struct stmpe_keypad *keypad,
 		error("i2c error while reading register 0x%x %d", reg, ret);
 		return -EINVAL;
 	}
-	debug("read block %d bytes at 0x%x", length, reg);
-	for (i = 0; i < length; i++)
-		debug("  [0x%x] = 0x%x", reg + i, out[i]);
 
 	return 0;
 }
@@ -1173,6 +1173,8 @@ int stmpe_inject_key(struct stmpe_keypad *keypad, uint8_t key,
 	}
 #endif
 
+	debug("reporting: keycode %i key %i", keypad->keys[key].code, key);
+
 	input_event(keypad->input_dev, EV_MSC, MSC_SCAN,
 					keypad->keys[key].code);
 	input_report_key(keypad->input_dev, key, type);
@@ -1316,6 +1318,9 @@ int stmpe_handle_keypress(struct stmpe_keypad *keypad)
 					key_data[i].key =
 					keypad->keys[key_data[i].code].translated;
 				}
+
+				error("keypad->mod_1_layout_table[%i][%i] = %i\n", row, col, keypad->mod_1_layout_table[row][col]);
+				error("Translated key %i = %i\n", key_data[i].key);
 
 				stmpe_inject_key(keypad,
 								 key_data[i].key,
@@ -1813,9 +1818,7 @@ static int stmpe_keypad_parse_dt(struct device *dev,
 			key = be32_to_cpup(prop_data + i);
 			row = KEY_ROW(key);
 			col = KEY_COL(key);
-			error("mod: writing to table row: %i col: %i modifier key\n", row, col);
 			keypad->mod_key_table[row][col] = KEY_VAL(key);
-			error("keypad->mod_key_table[%i][%i] = %i\n", row, col, KEY_VAL(key));
 		}
 	} else {
 		info("No modifier keycode table.");
@@ -1838,9 +1841,7 @@ static int stmpe_keypad_parse_dt(struct device *dev,
 			key = be32_to_cpup(prop_data + i);
 			row = KEY_ROW(key);
 			col = KEY_COL(key);
-			error("mod: writing to table row: %i col: %i modifier key\n", row, col);
 			keypad->mod_1_layout_table[row][col] = KEY_VAL(key);
-			error("keypad->mod_1_layout_table[%i][%i] = %i\n", row, col, KEY_VAL(key));
 		}
 	} else {
 		info("No modifier 1 layout table.");
