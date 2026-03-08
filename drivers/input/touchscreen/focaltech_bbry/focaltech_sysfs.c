@@ -522,25 +522,25 @@ static ssize_t fts_get_project_code_store(struct device *dev, struct device_attr
 #endif
 
 /************************************************************************
-* Name: fts_buttons_enabled_show
+* Name: button_enable_show
 * Brief:  show virtual button enabled status
 * Input: device, device attribute, char buf
 * Output: no
 * Return: char number
 ***********************************************************************/
-static ssize_t fts_buttons_enabled_show(struct device *dev, struct device_attribute *attr, char *buf)
+static ssize_t button_enable_show(struct device *dev, struct device_attribute *attr, char *buf)
 {
 	return snprintf(buf, PAGE_SIZE, "%d\n", fts_buttons_enabled ? 1 : 0);
 }
 
 /************************************************************************
-* Name: fts_buttons_enabled_store
+* Name: button_enable_store
 * Brief:  enable/disable virtual button reporting
 * Input: device, device attribute, char buf, char count
 * Output: no
 * Return: char count
 ***********************************************************************/
-static ssize_t fts_buttons_enabled_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t count)
+static ssize_t button_enable_store(struct device *dev, struct device_attribute *attr, const char *buf, size_t count)
 {
 	unsigned int val = 0;
 
@@ -602,11 +602,11 @@ static DEVICE_ATTR(fts_hw_reset, S_IRUGO|S_IWUSR, fts_hw_reset_show, fts_hw_rese
 static DEVICE_ATTR(fts_wakeup_gesture, S_IRUGO|S_IRGRP|S_IWUSR|S_IWGRP, fts_wakeup_gesture_show, fts_wakeup_gesture_store);
 
 /* FocalTech Buttons (virtual keys) enable/disable
-*   read:  cat fts_buttons_enabled
-*   write: echo 1 > fts_buttons_enabled  (enable)
-*          echo 0 > fts_buttons_enabled  (disable)
+*   read:  cat button_enable
+*   write: echo 1 > button_enable  (enable)
+*          echo 0 > button_enable  (disable)
 */
-static DEVICE_ATTR(fts_buttons_enabled, S_IRUGO|S_IRGRP|S_IWUSR|S_IWGRP, fts_buttons_enabled_show, fts_buttons_enabled_store);
+static DEVICE_ATTR(button_enable, S_IRUGO|S_IRGRP|S_IWUSR|S_IWGRP, button_enable_show, button_enable_store);
 
 /* add your attr in here*/
 static struct attribute *fts_attributes[] = {
@@ -618,7 +618,6 @@ static struct attribute *fts_attributes[] = {
 	&dev_attr_fts_write_reg.attr,
 	&dev_attr_fts_hw_reset.attr,
 	&dev_attr_fts_wakeup_gesture.attr,
-	&dev_attr_fts_buttons_enabled.attr,
 	NULL
 };
 
@@ -629,6 +628,7 @@ static struct attribute_group fts_attribute_group = {
 static DEVICE_ATTR(gesture_enable, 0644, fts_wakeup_gesture_show, fts_wakeup_gesture_store);
 static struct class * tp_device_class;
 static struct device * tp_gesture_dev;
+static struct device * tp_button_dev;
 
 static void tp_class_device_register(void)
 {
@@ -645,10 +645,21 @@ static void tp_class_device_register(void)
 	rc = device_create_file(tp_gesture_dev, &dev_attr_gesture_enable);
 	if ( rc < 0)
 		pr_err("Failed to create device file(%s)!\n", dev_attr_gesture_enable.attr.name);
+	tp_button_dev = device_create(tp_device_class, NULL, 0, NULL, "tp_button");
+	if (IS_ERR(tp_button_dev))
+		pr_err("Failed to create device(tp_button)!\n");
+	rc = device_create_file(tp_button_dev, &dev_attr_button_enable);
+	if (rc < 0)
+		pr_err("Failed to create device file(%s)!\n", dev_attr_button_enable.attr.name);
 }
 
 static void tp_class_device_unregister(void)
 {
+	if (tp_button_dev) {
+		device_remove_file(tp_button_dev, &dev_attr_button_enable);
+		device_destroy(tp_device_class, tp_button_dev->devt);
+		tp_button_dev = NULL;
+	}
 	if (tp_device_class != NULL) {
 		class_destroy(tp_device_class);
 		tp_device_class = NULL;

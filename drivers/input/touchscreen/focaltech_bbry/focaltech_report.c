@@ -747,7 +747,7 @@ static int fts_input_dev_report_B(struct ts_event *data)
 
 	for (i = 0; i < data->touch_point; i++)
 	{
-		 /* Skip touches in the virtual key zone when fts_buttons_enabled is disabled */
+		 /* Skip touches in the virtual key zone when button_enable is disabled */
 		 if (!fts_get_buttons_enabled() && FTS_KEY_ALL_Y_POS == data->au16_y[i])
 			continue;
 
@@ -853,7 +853,7 @@ static int fts_input_dev_report_key_event(struct ts_event *data)
 	int i = 0;
 	int bUsedKeyEvent = 1;//0:not used, 1: used
 
-	/* gate on fts_buttons_enabled sysfs toggle */
+	/* gate on button_enable sysfs toggle */
 	if (!fts_get_buttons_enabled())
 		return -1;
 
