@@ -626,9 +626,11 @@ static struct attribute_group fts_attribute_group = {
 	.attrs = fts_attributes
 };
 
-static DEVICE_ATTR(gesture_enable, 0644, fts_wakeup_gesture_show, fts_wakeup_gesture_store);
+static DEVICE_ATTR(gesture_enable, 0664, fts_wakeup_gesture_show, fts_wakeup_gesture_store);
+static DEVICE_ATTR(button_enable, 0664, fts_buttons_enabled_show, fts_buttons_enabled_store);
 static struct class * tp_device_class;
 static struct device * tp_gesture_dev;
+static struct device * tp_button_dev;
 
 static void tp_class_device_register(void)
 {
@@ -645,6 +647,14 @@ static void tp_class_device_register(void)
 	rc = device_create_file(tp_gesture_dev, &dev_attr_gesture_enable);
 	if ( rc < 0)
 		pr_err("Failed to create device file(%s)!\n", dev_attr_gesture_enable.attr.name);
+
+	tp_button_dev = device_create(tp_device_class, NULL, 0, NULL, "tp_button");
+	if (IS_ERR(tp_button_dev))
+		pr_err("Failed to create device(tp_button_dev)!\n");
+
+	rc = device_create_file(tp_button_dev, &dev_attr_button_enable);
+	if ( rc < 0)
+		pr_err("Failed to create device file(%s)!\n", dev_attr_button_enable.attr.name);
 }
 
 static void tp_class_device_unregister(void)
