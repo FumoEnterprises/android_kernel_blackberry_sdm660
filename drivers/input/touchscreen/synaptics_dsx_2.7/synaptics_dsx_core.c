@@ -818,10 +818,42 @@ static ssize_t synaptics_rmi4_f01_flashprog_show(struct device *dev,
 			device_status.flash_prog);
 }
 
+static void synaptics_rmi4_f12_0dbutton_enable(struct synaptics_rmi4_data *rmi4_data)
+{
+	struct synaptics_rmi4_device_info *rmi = &rmi4_data->rmi4_mod_info;
+	struct synaptics_rmi4_fn *fhandler;
+	unsigned char intr_enable;
+	int retval;
+	unsigned char ii;
+
+	list_for_each_entry(fhandler, &rmi->support_fn_list, link) {
+		if (fhandler->fn_number == SYNAPTICS_RMI4_F1A) {
+
+			ii = fhandler->intr_reg_num;
+
+			retval = synaptics_rmi4_reg_read(rmi4_data,
+											 rmi4_data->f01_ctrl_base_addr + 1 + ii,
+									&intr_enable, sizeof(intr_enable));
+
+			if (retval < 0)
+				return;
+
+			if (rmi4_data->button_0d_enabled)
+				intr_enable |= fhandler->intr_mask;
+			else
+				intr_enable &= ~fhandler->intr_mask;
+
+			synaptics_rmi4_reg_write(rmi4_data,
+									 rmi4_data->f01_ctrl_base_addr + 1 + ii,
+							&intr_enable, sizeof(intr_enable));
+		}
+	}
+}
+
 static ssize_t synaptics_rmi4_0dbutton_show(struct device *dev,
 		struct device_attribute *attr, char *buf)
 {
-	struct synaptics_rmi4_data *rmi4_data = dev_get_drvdata(dev);
+	struct synaptics_rmi4_data *rmi4_data = dev_get_drvdata(g_rmi4_dev);
 
 	return snprintf(buf, PAGE_SIZE, "%u\n",
 			rmi4_data->button_0d_enabled);
@@ -835,7 +867,7 @@ static ssize_t synaptics_rmi4_0dbutton_store(struct device *dev,
 	unsigned char ii;
 	unsigned char intr_enable;
 	struct synaptics_rmi4_fn *fhandler;
-	struct synaptics_rmi4_data *rmi4_data = dev_get_drvdata(dev);
+	struct synaptics_rmi4_data *rmi4_data = dev_get_drvdata(g_rmi4_dev);
 	struct synaptics_rmi4_device_info *rmi;
 
 	rmi = &(rmi4_data->rmi4_mod_info);
@@ -928,15 +960,16 @@ static ssize_t synaptics_rmi4_wake_gesture_store(struct device *dev,
 }
 
 static DEVICE_ATTR(gesture_enable, 0644, synaptics_rmi4_wake_gesture_show, synaptics_rmi4_wake_gesture_store);
-static DEVICE_ATTR(glove_enable, 0644, synaptics_rmi4_glove_mode_show, synaptics_rmi4_glove_mode_store);
+static DEVICE_ATTR(glove_enable, 0664, synaptics_rmi4_glove_mode_show, synaptics_rmi4_glove_mode_store);
 /* MODIFIED-BEGIN by Haojun Chen, 2017-08-08,BUG-5159539*/
 static DEVICE_ATTR(cover_enable, 0644, synaptics_rmi4_cover_mode_show, synaptics_rmi4_cover_mode_store);
-
+static DEVICE_ATTR(button_enable, 0664, synaptics_rmi4_0dbutton_show, synaptics_rmi4_0dbutton_store);
 
 static struct class * tp_device_class;
 static struct device * tp_gesture_dev;
 static struct device * tp_glove_dev;
 static struct device * tp_cover_dev;
+static struct device * tp_button_dev;
 /* MODIFIED-END by Haojun Chen,BUG-5159539*/
 
 static void tp_class_device_register(void)
@@ -972,6 +1005,15 @@ static void tp_class_device_register(void)
 	if ( rc < 0)
 		pr_err("Failed to create device file(%s)!\n", dev_attr_cover_enable.attr.name);
 		/* MODIFIED-END by Haojun Chen,BUG-5159539*/
+
+	tp_button_dev = device_create(tp_device_class, NULL, 0, NULL, "tp_button");
+	if (IS_ERR(tp_button_dev))
+		pr_err("Failed to create device(tp_button_dev)!\n");
+
+	rc = device_create_file(tp_button_dev, &dev_attr_button_enable);
+	if ( rc < 0)
+		pr_err("Failed to create device file(%s)!\n", dev_attr_button_enable.attr.name);
+	/* MODIFIED-END by Haojun Chen,BUG-5159539*/
 }
 
 static void tp_class_device_unregister(void)
@@ -5117,6 +5159,7 @@ exit:
 	mutex_unlock(&exp_data.mutex);
 	synaptics_rmi4_f12_glove_enable(rmi4_data, rmi4_data->glove_mode);
 	synaptics_rmi4_f12_cover_enable(rmi4_data, rmi4_data->cover_mode); // MODIFIED by Haojun Chen, 2017-08-08,BUG-5159539
+	synaptics_rmi4_f12_0dbutton_enable(rmi4_data);
 
 	rmi4_data->suspend = false;
 
