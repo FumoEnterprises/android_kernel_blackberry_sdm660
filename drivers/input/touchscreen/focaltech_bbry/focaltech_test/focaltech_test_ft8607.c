@@ -151,7 +151,7 @@ static unsigned char FT8607_TestItem_ShortCircuitTest(bool* bTestResult);
 * Output: none
 * Return: Test Result, PASS or FAIL
 ***********************************************************************/
-boolean FT8607_StartTest()
+boolean FT8607_StartTest(void)
 {
 	bool bTestResult = true, bTempResult = 1;
 //	unsigned char ucTempResult = 1;
@@ -164,11 +164,13 @@ boolean FT8607_StartTest()
 	FTS_TEST_DBG("");
 
 //	theDevice.m_cTest_FT8607[ucDevice]->InitFT8607Test();
-	//--------------1. Init part	if(InitTest() < 0)
+	//--------------1. Init part
+	if(InitTest() < 0)
 	{
 		FTS_TEST_DBG("[focal] Failed to init test.");
 		return false;
-	}
+	}
+
 	
 	//--------------2. test item
 	if(0 == g_TestItemNum)
