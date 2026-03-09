@@ -184,7 +184,7 @@ static int q6lsm_callback(struct apr_client_data *data, void *priv)
 		if (client->cb)
 			client->cb(data->opcode, data->token,
 					(void *)&read_done,
-					sizeof(read_done));
+					(void *)sizeof(read_done));
 		return 0;
 	} else if (data->opcode == APR_BASIC_RSP_RESULT) {
 		token = data->token;
@@ -236,7 +236,7 @@ static int q6lsm_callback(struct apr_client_data *data, void *priv)
 
 	if (client->cb)
 		client->cb(data->opcode, data->token, data->payload,
-				data->payload_size); // MODIFIED by hongwei.tian, 2019-08-01,BUG-8201402
+				(void *)data->payload_size); // MODIFIED by hongwei.tian, 2019-08-01,BUG-8201402
 
 	return 0;
 }
@@ -1420,7 +1420,7 @@ static int q6lsm_mmapcallback(struct apr_client_data *data, void *priv)
 	if (client->cb)
 		client->cb(data->opcode, data->token,
 			   /* MODIFIED-BEGIN by hongwei.tian, 2019-08-01,BUG-8201402*/
-			   data->payload, data->payload_size);
+			   data->payload, (void *)data->payload_size);
 			   /* MODIFIED-END by hongwei.tian,BUG-8201402*/
 	return 0;
 }
