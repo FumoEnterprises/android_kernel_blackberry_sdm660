@@ -2026,6 +2026,9 @@ static int stmpe_keypad_probe(struct i2c_client *i2c,
 
 	keypad->input_dev->name = keypad_name[0];
 	keypad->input_dev->id.bustype = BUS_I2C;
+	keypad->input_dev->id.vendor  = 0x0483; /* STMicroelectronics */
+	keypad->input_dev->id.product = 0x1850;
+	keypad->input_dev->id.version = 0x0100;
 	keypad->input_dev->dev.parent = &i2c->dev;
 
 	input_set_capability(keypad->input_dev, EV_MSC, MSC_SCAN);
