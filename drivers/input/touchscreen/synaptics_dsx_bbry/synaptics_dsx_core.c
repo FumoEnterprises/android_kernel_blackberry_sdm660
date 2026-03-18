@@ -6415,6 +6415,8 @@ static int synaptics_rmi4_set_input_dev(struct synaptics_rmi4_data *rmi4_data)
 	rmi4_data->input_dev->name =
 		rmi4_data->hw_if->board_data->input_dev_name;
 	rmi4_data->input_dev->phys = INPUT_PHYS_NAME;
+	rmi4_data->input_dev->id.bustype = BUS_I2C;
+	rmi4_data->input_dev->id.vendor = 0x06CB;   /* Synaptcs Vendor ID */
 	rmi4_data->input_dev->id.product = SYNAPTICS_DSX_DRIVER_PRODUCT;
 	rmi4_data->input_dev->id.version = SYNAPTICS_DSX_DRIVER_VERSION;
 	rmi4_data->input_dev->dev.parent = rmi4_data->pdev->dev.parent;
