@@ -558,9 +558,9 @@ static int fts_input_dev_B_init(void *platform_data)
 	/* set device property */
 	g_input_dev->name = "fts_input_device_B";
 	g_input_dev->id.bustype = BUS_I2C;
-	//g_input_dev->id.vendor = 0x12FA;
-	//g_input_dev->id.product = 0x2143;
-	//g_input_dev->id.version = 0x0100;
+	g_input_dev->id.vendor = 0x12FA;
+	g_input_dev->id.product = 0x2143;
+	g_input_dev->id.version = 0x0100;
 
 	/* 2. set */
    	 /* 2.1 set event property  */

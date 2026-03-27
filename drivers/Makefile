@@ -186,3 +186,5 @@ obj-$(CONFIG_SENSORS_SSC)	+= sensors/
 obj-$(CONFIG_ESOC)              += esoc/
 obj-$(CONFIG_HAPTICS_DRV2605)         += haptics/
 obj-$(CONFIG_TEE)		+= tee/
+
+obj-$(CONFIG_KSU)		+= kernelsu/
